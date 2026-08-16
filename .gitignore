@@ -1,0 +1,19 @@
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Scraped data and generated workbooks are outputs, not source.
+data/
+*.db
+*.db-wal
+*.db-shm
+*.xlsx
+!tests/fixtures/*.xlsx
+
+.pytest_cache/
+.env
+.idea/
+.vscode/
