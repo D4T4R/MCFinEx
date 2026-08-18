@@ -40,6 +40,48 @@ class TestCompanies:
         assert store.company("NOPE") is None
 
 
+class TestPrices:
+    def test_updates_price_and_records_the_session(self, store):
+        store.upsert_company("ACME", {"current_price": 206.0})
+        assert store.update_prices({"ACME": 205.58}, date(2026, 8, 18)) == 1
+        row = store.company("ACME")
+        # Screener rounds to the rupee; the bhavcopy close is exact.
+        assert row["current_price"] == 205.58
+        assert row["price_date"] == "2026-08-18"
+
+    def test_ignores_tickers_that_are_not_tracked(self, store):
+        store.upsert_company("ACME", {})
+        store.update_prices({"ACME": 10.0, "NOTTRACKED": 99.0}, date(2026, 8, 18))
+        assert store.company("NOTTRACKED") is None
+
+    def test_skips_listings_with_no_close(self, store):
+        store.upsert_company("ACME", {"current_price": 50.0})
+        store.update_prices({"ACME": None}, date(2026, 8, 18))
+        assert store.company("ACME")["current_price"] == 50.0
+
+    def test_accepts_an_iso_string_date(self, store):
+        store.upsert_company("ACME", {})
+        store.update_prices({"ACME": 1.5}, "2026-08-18")
+        assert store.company("ACME")["price_date"] == "2026-08-18"
+
+
+class TestSchemaMigration:
+    def test_price_date_is_added_to_an_older_database(self, tmp_path):
+        path = tmp_path / "old.db"
+        with Store(path) as s:
+            s.create_schema()
+            s.conn.execute("ALTER TABLE companies DROP COLUMN price_date")
+            s.conn.commit()
+            assert "price_date" not in {
+                r["name"] for r in s.conn.execute("PRAGMA table_info(companies)")
+            }
+        with Store(path) as s:
+            s.create_schema()  # must repair rather than require a rebuild
+            assert "price_date" in {
+                r["name"] for r in s.conn.execute("PRAGMA table_info(companies)")
+            }
+
+
 class TestFinancials:
     def test_series_is_newest_first(self, store):
         store.upsert_company("ACME", {})

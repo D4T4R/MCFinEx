@@ -12,7 +12,7 @@ import requests
 from .config import settings
 from .db.store import Store
 from .export import workbook
-from .pipeline import persist
+from .pipeline import persist, revalue
 from .quarters import current_quarter
 from .sources import nse, screener
 
@@ -55,6 +55,11 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--force", action="store_true", help="re-scrape even if already current")
     p.add_argument("--limit", type=int, help="stop after N companies")
     p.set_defaults(handler=cmd_scrape)
+
+    p = sub.add_parser("prices", help="refresh closing prices from the NSE bhavcopy")
+    p.add_argument("--no-revalue", action="store_true",
+                   help="update prices without recomputing stored valuations")
+    p.set_defaults(handler=cmd_prices)
 
     p = sub.add_parser("export", help="fill the SSP workbook's input cells")
     p.add_argument("-t", "--template", default=str(settings.template_path))
@@ -141,6 +146,30 @@ def cmd_scrape(args) -> int:
     if failures:
         log.warning("%d company/companies failed", failures)
     return 1 if failures and failures == len(tickers) else 0
+
+
+def cmd_prices(args) -> int:
+    """Overwrite screener's rounded price with the exact NSE close.
+
+    Screener displays the price to the nearest rupee, so a stock closing at
+    205.58 is stored as 206. Column AJ drives the current P/E and every target
+    price, so the exact figure matters. Prices also move daily while
+    fundamentals move quarterly, which is why this is separate from `scrape`.
+    """
+    session = requests.Session()
+    day, payload = nse.latest_bhavcopy(session=session)
+    listings = nse.parse_bhavcopy(payload)
+    log.info("bhavcopy for %s: %d equity listings", day, len(listings))
+
+    with Store(args.db) as store:
+        store.create_schema()
+        updated = store.update_prices({l.ticker: l.close for l in listings}, day)
+        log.info("updated %d closing prices", updated)
+
+        if not args.no_revalue:
+            revalued = sum(1 for t in store.scraped_tickers() if revalue(store, t))
+            log.info("recomputed valuations for %d companies", revalued)
+    return 0
 
 
 def cmd_export(args) -> int:

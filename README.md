@@ -41,6 +41,7 @@ mcfinex universe                      # seed ~2000 tickers + ISINs from the NSE 
 mcfinex scrape RELIANCE TCS           # scrape named companies
 mcfinex scrape --from-template        # scrape the companies tracked in the workbook
 mcfinex scrape --all --limit 50       # or work through the seeded universe
+mcfinex prices                        # refresh closing prices from the NSE bhavcopy
 mcfinex show RELIANCE                 # print stored values and valuations
 mcfinex export                        # fill a copy of the workbook
 mcfinex export --in-place             # or write into the template itself
@@ -48,6 +49,13 @@ mcfinex export --in-place             # or write into the template itself
 
 Re-running `scrape` skips anything already checked today or already carrying the
 current quarter's results; `--force` overrides that.
+
+Run `prices` after `scrape`. Screener displays the price rounded to the nearest
+rupee — a stock closing at 205.58 is shown as 206 — and column AJ drives the
+current P/E and every target price, so `prices` overwrites it with the exact NSE
+close and recomputes the stored valuations. It is one download rather than one
+request per company, so it is quick enough to run daily: prices move daily,
+fundamentals quarterly.
 
 Settings are environment variables, all optional:
 
@@ -78,7 +86,7 @@ to the writer, so whatever they already hold survives.
 | N | borrowings — see note below |
 | V, AA | EBIT (PBT + interest), inventory turnover (365 / inventory days) |
 | AD–AF, AH | operating / investing / financing / free cash flow |
-| AJ, AK, AP, AS | price, TTM EPS, book value, dividend yield |
+| AJ, AK, AP, AS | price (exact NSE close), TTM EPS, book value, dividend yield |
 | AZ | current EV/EBITDA multiple (feeds `BP = AZ*BO`) |
 | BE–BI | EBITDA, 5 periods |
 | BQ, BS | long-term borrowings, shares outstanding (crore) |
@@ -179,7 +187,7 @@ src/mcfinex/
   sources/screener.py  company page parser
   sources/nse.py       bhavcopy loader
   export/workbook.py   SSP workbook writer
-tests/               107 tests; screener parsing runs off a saved fixture
+tests/               119 tests; screener parsing runs off a saved fixture
 ```
 
 `pytest` needs no network — the screener test uses `tests/fixtures/coastcorp.html`.

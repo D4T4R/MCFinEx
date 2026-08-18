@@ -161,6 +161,52 @@ def valuations(company: Company, derived: Derived) -> dict[str, dict]:
     }
 
 
+def revalue(store: Store, ticker: str) -> bool:
+    """Recompute a company's valuations from stored facts, with no network.
+
+    A price refresh changes every model output, so the stored valuations have
+    to follow. The workbook recalculates itself from column AJ, but ``mcfinex
+    show`` reads these rows. Returns ``False`` if there is nothing to work with.
+    """
+    company = store.company(ticker)
+    if company is None or company["current_price"] is None:
+        return False
+
+    price = company["current_price"]
+    derived = store.valuation_fields(ticker, "derived")
+
+    # Stored series are newest-first; the models want oldest-first.
+    ebitda = store.series(ticker, "profit-loss", *labels.OPERATING_PROFIT, limit=HISTORY)[::-1]
+    eps_yearly = store.series(ticker, "profit-loss", *labels.EPS, limit=HISTORY)[::-1]
+    eps_quarterly = store.series(ticker, "quarters", *labels.EPS, limit=HISTORY)[::-1]
+
+    # The EV/EBITDA multiple embeds the old price through market cap, so it is
+    # rescaled rather than reused.
+    multiple = derived.get("ev_ebitda_multiple")
+    shares = company["outstanding_shares"]
+    borrowings = store.series(ticker, "balance-sheet", *labels.BORROWINGS, limit=1)
+    investments = store.series(ticker, "balance-sheet", *labels.INVESTMENTS, limit=1)
+    if shares and ebitda and ebitda[-1]:
+        market_cap = price * shares
+        enterprise_value = market_cap + (borrowings[0] if borrowings else 0.0) \
+            - (investments[0] if investments else 0.0)
+        multiple = enterprise_value / ebitda[-1]
+
+    store.replace_valuations(ticker, "ev_ebitda", value_by_ev_ebitda(
+        ebitda,
+        ev_ebitda_multiple=multiple,
+        outstanding_shares=shares,
+        long_term_borrowings=borrowings[0] if borrowings else None,
+        current_price=price,
+    ).as_dict())
+    store.replace_valuations(ticker, "eps_yearly",
+                             value_by_eps(eps_yearly, current_price=price).as_dict())
+    store.replace_valuations(ticker, "eps_quarterly",
+                             value_by_eps(eps_quarterly, current_price=price).as_dict())
+    store.replace_valuations(ticker, "derived", {**derived, "ev_ebitda_multiple": multiple})
+    return True
+
+
 def persist(store: Store, company: Company, *, today: date | None = None) -> Derived:
     """Derive, value and write a scraped company in one go."""
     derived = derive(company)

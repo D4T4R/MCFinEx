@@ -22,6 +22,10 @@ CREATE TABLE IF NOT EXISTS companies (
     roce                  REAL,
     roe                   REAL,
     outstanding_shares    REAL,   -- crore
+    -- Trading day the price came from. Screener rounds its displayed price to
+    -- the nearest rupee, so `mcfinex prices` overwrites it with the exact NSE
+    -- close and records which session that was.
+    price_date            TEXT,
     consolidated          INTEGER NOT NULL DEFAULT 0,
     scan_for_results      TEXT    NOT NULL DEFAULT 'Y',
     last_updated          TEXT,   -- ISO date of the last successful scrape

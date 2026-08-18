@@ -22,6 +22,7 @@ COMPANY_COLUMNS = (
     "market_cap", "current_price", "book_value", "stock_pe", "industry_pe",
     "dividend_yield", "roce", "roe", "outstanding_shares", "consolidated",
     "scan_for_results", "last_updated", "last_updated_quarter", "latest_period",
+    "price_date",
 )
 
 
@@ -47,7 +48,20 @@ class Store:
 
     def create_schema(self) -> None:
         self.conn.executescript(SCHEMA_PATH.read_text())
+        self._add_missing_columns()
         self.conn.commit()
+
+    def _add_missing_columns(self) -> None:
+        """Bring an existing database up to the current schema.
+
+        ``CREATE TABLE IF NOT EXISTS`` leaves an older database untouched, so
+        columns added later have to be applied separately rather than forcing a
+        re-scrape of everything.
+        """
+        existing = {r["name"] for r in self.conn.execute("PRAGMA table_info(companies)")}
+        for column, ddl in (("price_date", "TEXT"),):
+            if column not in existing:
+                self.conn.execute(f"ALTER TABLE companies ADD COLUMN {column} {ddl}")
 
     # ---------------------------------------------------------------- writes
 
@@ -69,6 +83,25 @@ class Store:
         )
         self.conn.execute(sql, [ticker, *(_scalar(values[c]) for c in cols)])
         self.conn.commit()
+
+    def update_prices(self, prices: Mapping[str, float | None], as_of: date | str) -> int:
+        """Set the closing price for companies already known, ignoring the rest.
+
+        Only updates existing rows: the bhavcopy lists every instrument on the
+        exchange, and a price alone is not a reason to start tracking one.
+        """
+        stamp = as_of.isoformat() if isinstance(as_of, date) else as_of
+        payload = [
+            (price, stamp, ticker)
+            for ticker, price in prices.items()
+            if price is not None
+        ]
+        with self.conn:
+            cursor = self.conn.executemany(
+                "UPDATE companies SET current_price = ?, price_date = ? WHERE ticker = ?",
+                payload,
+            )
+        return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
 
     def replace_financials(self, ticker: str, rows: Iterable[tuple[str, str, str, float | None]]) -> int:
         """Replace this company's financial facts. Rows are (period, statement, label, value)."""
