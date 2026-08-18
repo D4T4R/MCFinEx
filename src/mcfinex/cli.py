@@ -13,6 +13,7 @@ from .config import settings
 from .db.store import Store
 from .export import workbook
 from .pipeline import persist, revalue
+from .report import screen_all
 from .quarters import current_quarter
 from .sources import nse, screener
 
@@ -55,6 +56,12 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--force", action="store_true", help="re-scrape even if already current")
     p.add_argument("--limit", type=int, help="stop after N companies")
     p.set_defaults(handler=cmd_scrape)
+
+    p = sub.add_parser("screen", help="rank companies by BUY signals")
+    p.add_argument("-n", "--limit", type=int, default=25)
+    p.add_argument("--min-buys", type=int, default=0)
+    p.add_argument("--csv", help="write the full screen to this CSV instead of printing")
+    p.set_defaults(handler=cmd_screen)
 
     p = sub.add_parser("prices", help="refresh closing prices from the NSE bhavcopy")
     p.add_argument("--no-revalue", action="store_true",
@@ -146,6 +153,37 @@ def cmd_scrape(args) -> int:
     if failures:
         log.warning("%d company/companies failed", failures)
     return 1 if failures and failures == len(tickers) else 0
+
+
+def cmd_screen(args) -> int:
+    """The workbook's Results sheet, without the workbook."""
+    with Store(args.db) as store:
+        rows = [r for r in screen_all(store) if r.screening.buy_count >= args.min_buys]
+    if not rows:
+        log.error("nothing to screen; run `mcfinex scrape` first")
+        return 1
+    rows.sort(key=lambda r: (-r.screening.buy_count, r.screening.sell_count))
+
+    if args.csv:
+        import csv as _csv
+        records = [r.as_record() for r in rows]
+        with open(args.csv, "w", newline="") as handle:
+            writer = _csv.DictWriter(handle, fieldnames=list(records[0]))
+            writer.writeheader()
+            writer.writerows(records)
+        log.info("wrote %s (%d companies)", args.csv, len(records))
+        return 0
+
+    print(f"{'TICKER':<12} {'COMPANY':<32} {'BUY':>3} {'SELL':>4} {'PRICE':>10} {'TARGET':>10} {'UPSIDE':>8}")
+    for row in rows[: args.limit]:
+        s, m = row.screening, row.metrics
+        target = f"{row.target_ev_ebitda:,.1f}" if row.target_ev_ebitda else "-"
+        upside = f"{m.ev_ebitda_upside:+.1f}%" if m.ev_ebitda_upside is not None else "-"
+        price = f"{m.price:,.2f}" if m.price else "-"
+        print(f"{s.ticker:<12} {str(s.name)[:32]:<32} {s.buy_count:>3} {s.sell_count:>4} "
+              f"{price:>10} {target:>10} {upside:>8}")
+    print(f"\n{len(rows)} companies screened. `mcfinex-dashboard` for the full view.")
+    return 0
 
 
 def cmd_prices(args) -> int:

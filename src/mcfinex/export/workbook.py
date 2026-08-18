@@ -105,6 +105,7 @@ def populate(store: Store, template: str | Path, output: str | Path,
     if DATA_SHEET not in book.sheetnames:
         raise WorkbookError(f"{template} has no '{DATA_SHEET}' sheet")
     sheet = book[DATA_SHEET]
+    _force_recalculation(book)
 
     index = _ticker_index(sheet)
     next_free = _first_blank_row(sheet)
@@ -123,6 +124,23 @@ def populate(store: Store, template: str | Path, output: str | Path,
 
     book.save(target)
     return target, updated, appended
+
+
+def _force_recalculation(book) -> None:
+    """Make the workbook recalculate when it is opened.
+
+    Two things conspire to leave every formula reading zero. The template ships
+    with ``calcMode="manual"``, so the application will not recalculate on its
+    own; and openpyxl writes formulas without their cached results, so there is
+    no previous value to fall back on. The whole EV/EBITDA chain -- BN, BO, BP,
+    BR and the BT-CC target prices that depend on them -- therefore displays 0
+    even though the inputs are correct.
+
+    Setting automatic calculation as well as ``fullCalcOnLoad`` covers both
+    Excel and LibreOffice, which ignores the latter on its own.
+    """
+    book.calculation.calcMode = "auto"
+    book.calculation.fullCalcOnLoad = True
 
 
 def tickers_in(template: str | Path) -> list[str]:

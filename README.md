@@ -18,14 +18,15 @@ NSE bhavcopy ──> tickers + ISINs ──┐
 screener.in ──> financial history ─┘
 ```
 
-**The workbook is the model.** `SSP_Working_merged.xlsx` already implements the
-valuation as formulas — `BE=AU/AZ`, `CI=IFERROR((CD-CE)/CE*SIGN(CE),0)`,
-`CS=CO+(CO*CR%)` — and the Results sheet is only references back into Data. So
-this project writes **raw inputs** and lets Excel recalculate. It does not
-overwrite formula cells.
+**Python owns the model.** Scoring lives in `screening.py`, which is pure — no
+database, no UI, no I/O — so the CLI, the Streamlit app and anything added later
+all share one definition of every threshold.
 
-Python still computes the same models internally (`valuation.py`) so the
-numbers can be checked from the CLI without opening Excel.
+The SSP workbook is now an optional export, not the engine. It used to hold the
+valuation as Excel formulas, but its STRATEGY columns all pointed at a deleted
+lookup table and evaluated to `#REF!`; the only surviving trace of their
+vocabulary was `Results!M = COUNTIF(C:L,"BUY")`. Thresholds were recovered from
+the surviving `IF` conditions and restated in Python.
 
 ## Install
 
@@ -43,8 +44,10 @@ mcfinex scrape --from-template        # scrape the companies tracked in the work
 mcfinex scrape --all --limit 50       # or work through the seeded universe
 mcfinex prices                        # refresh closing prices from the NSE bhavcopy
 mcfinex show RELIANCE                 # print stored values and valuations
-mcfinex export                        # fill a copy of the workbook
-mcfinex export --in-place             # or write into the template itself
+mcfinex screen --min-buys 6           # rank by BUY signals
+mcfinex screen --csv screen.csv       # or dump the whole screen
+mcfinex-dashboard                     # Streamlit UI on :8501
+mcfinex export                        # optional: fill a copy of the workbook
 ```
 
 Re-running `scrape` skips anything already checked today or already carrying the
@@ -184,10 +187,14 @@ src/mcfinex/
   db/schema.sql      SQLite schema
   db/store.py        parameterised persistence
   labels.py          screener line-item names and bank/NBFC aliases
+  screening.py       BUY/HOLD/SELL signals (pure: no DB, no UI)
+  report.py          store -> screening glue, sector median P/E
+  ui/dashboard.py    Streamlit screener
   sources/screener.py  company page parser
   sources/nse.py       bhavcopy loader
   export/workbook.py   SSP workbook writer
-tests/               119 tests; screener parsing runs off a saved fixture
+tests/               164 tests; screener parsing runs off a saved fixture,
+                     the dashboard off Streamlit's AppTest harness
 ```
 
 `pytest` needs no network — the screener test uses `tests/fixtures/coastcorp.html`.

@@ -60,11 +60,14 @@ def derive(company: Company) -> Derived:
         if equity_capital is not None and face_value else None
     )
 
-    # EV = equity + debt - cash. Screener has no cash line in the default view,
-    # so Investments stands in for it; that is the same proxy its own ratios use.
+    # EV = equity + debt - cash. Screener publishes no cash line, and its
+    # `Investments` row is NOT a cash equivalent -- for a bank or insurer it is
+    # the operating asset itself. Subtracting it drove 27 companies to a
+    # negative enterprise value, LIC to minus five trillion rupees. So cash is
+    # simply not netted off: the result is conservative rather than absurd.
     ev = None
     if market_cap is not None:
-        ev = market_cap + (borrowings or 0.0) - (investments or 0.0)
+        ev = market_cap + (borrowings or 0.0)
 
     ebitda_latest = pl.latest(*labels.OPERATING_PROFIT)
     multiple = ev / ebitda_latest if ev is not None and ebitda_latest else None
@@ -183,13 +186,21 @@ def revalue(store: Store, ticker: str) -> bool:
     # The EV/EBITDA multiple embeds the old price through market cap, so it is
     # rescaled rather than reused.
     multiple = derived.get("ev_ebitda_multiple")
+    enterprise_value = derived.get("enterprise_value")
     shares = company["outstanding_shares"]
     borrowings = store.series(ticker, "balance-sheet", *labels.BORROWINGS, limit=1)
-    investments = store.series(ticker, "balance-sheet", *labels.INVESTMENTS, limit=1)
-    if shares and ebitda and ebitda[-1]:
+    # Screener's own market cap is authoritative. Share count is derived as
+    # equity capital / face value, which is only an approximation -- it is out
+    # by 2x for LIC and six others -- so it is the fallback, not the default.
+    market_cap = company["market_cap"]
+    if market_cap is None and shares and price:
         market_cap = price * shares
-        enterprise_value = market_cap + (borrowings[0] if borrowings else 0.0) \
-            - (investments[0] if investments else 0.0)
+    if market_cap:
+        # Matches derive(): no cash netted off, because screener has no cash line.
+        # Recomputed even when EBITDA is unusable -- otherwise a company with no
+        # operating profit keeps whatever enterprise value it was last given.
+        enterprise_value = market_cap + (borrowings[0] if borrowings else 0.0)
+    if enterprise_value and ebitda and ebitda[-1]:
         multiple = enterprise_value / ebitda[-1]
 
     store.replace_valuations(ticker, "ev_ebitda", value_by_ev_ebitda(
@@ -203,7 +214,11 @@ def revalue(store: Store, ticker: str) -> bool:
                              value_by_eps(eps_yearly, current_price=price).as_dict())
     store.replace_valuations(ticker, "eps_quarterly",
                              value_by_eps(eps_quarterly, current_price=price).as_dict())
-    store.replace_valuations(ticker, "derived", {**derived, "ev_ebitda_multiple": multiple})
+    store.replace_valuations(ticker, "derived", {
+        **derived,
+        "ev_ebitda_multiple": multiple,
+        "enterprise_value": enterprise_value,
+    })
     return True
 
 
