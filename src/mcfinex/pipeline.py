@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from datetime import date
 
+from . import labels
 from .db.store import Store
 from .quarters import current_quarter
 from .sources.screener import Company
@@ -30,6 +31,8 @@ class Derived:
     ebit: float | None = None
     inventory_turnover: float | None = None
     free_cash_flow: float | None = None
+    total_other_liabilities: float | None = None   # includes bank deposits
+    deposits: float | None = None
 
 
 def derive(company: Company) -> Derived:
@@ -41,9 +44,12 @@ def derive(company: Company) -> Derived:
 
     face_value = company.ratios.get("Face Value")
     market_cap = company.ratios.get("Market Cap")
-    equity_capital = bs.latest("Equity Capital")
-    borrowings = bs.latest("Borrowings")
-    investments = bs.latest("Investments")
+    equity_capital = bs.latest(*labels.EQUITY_CAPITAL)
+    borrowings = bs.latest(*labels.BORROWINGS)
+    investments = bs.latest(*labels.INVESTMENTS)
+    # Banks fund themselves with deposits, which screener lists separately and
+    # non-financials do not have at all.
+    deposits = bs.latest(*labels.DEPOSITS)
 
     # Equity capital is share count x face value, both in rupees, so dividing
     # gives the share count. Screener reports the balance sheet in crore, so the
@@ -60,15 +66,18 @@ def derive(company: Company) -> Derived:
     if market_cap is not None:
         ev = market_cap + (borrowings or 0.0) - (investments or 0.0)
 
-    ebitda_latest = pl.latest("Operating Profit")
+    ebitda_latest = pl.latest(*labels.OPERATING_PROFIT)
     multiple = ev / ebitda_latest if ev is not None and ebitda_latest else None
 
     # EBIT is profit before tax with interest added back.
-    pbt, interest = pl.latest("Profit before tax"), pl.latest("Interest")
+    pbt = pl.latest(*labels.PROFIT_BEFORE_TAX)
+    interest = pl.latest(*labels.INTEREST)
     ebit = pbt + interest if pbt is not None and interest is not None else None
 
-    inv_days = ratios.latest("Inventory Days")
+    inv_days = ratios.latest(*labels.INVENTORY_DAYS)
     turnover = 365.0 / inv_days if inv_days else None
+
+    other_liabilities = bs.latest(*labels.OTHER_LIABILITIES)
 
     return Derived(
         outstanding_shares=shares,
@@ -76,8 +85,18 @@ def derive(company: Company) -> Derived:
         ev_ebitda_multiple=multiple,
         ebit=ebit,
         inventory_turnover=turnover,
-        free_cash_flow=cf.latest("Free Cash Flow"),
+        free_cash_flow=cf.latest(*labels.FREE_CASH_FLOW),
+        # Deposits belong with the other liabilities so that
+        # reserves + capital + liabilities + borrowings reconciles to the
+        # balance-sheet total for banks as well as for everyone else.
+        total_other_liabilities=_add(other_liabilities, deposits),
+        deposits=deposits,
     )
+
+
+def _add(*values: float | None) -> float | None:
+    present = [v for v in values if v is not None]
+    return sum(present) if present else None
 
 
 def company_fields(company: Company, derived: Derived, *, today: date | None = None) -> dict:
@@ -123,16 +142,16 @@ def valuations(company: Company, derived: Derived) -> dict[str, dict]:
     pl = company.section("profit-loss")
     quarters = company.section("quarters")
 
-    ebitda = pl.series("Operating Profit")[-HISTORY:]
-    eps_yearly = pl.series("EPS in Rs")[-HISTORY:]
-    eps_quarterly = quarters.series("EPS in Rs")[-HISTORY:]
+    ebitda = pl.series(*labels.OPERATING_PROFIT)[-HISTORY:]
+    eps_yearly = pl.series(*labels.EPS)[-HISTORY:]
+    eps_quarterly = quarters.series(*labels.EPS)[-HISTORY:]
     price = company.ratios.get("Current Price")
 
     ev_model = value_by_ev_ebitda(
         ebitda,
         ev_ebitda_multiple=derived.ev_ebitda_multiple,
         outstanding_shares=derived.outstanding_shares,
-        long_term_borrowings=company.section("balance-sheet").latest("Borrowings"),
+        long_term_borrowings=company.section("balance-sheet").latest(*labels.BORROWINGS),
         current_price=price,
     )
     return {

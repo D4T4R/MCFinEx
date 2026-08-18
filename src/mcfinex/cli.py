@@ -48,6 +48,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("scrape", help="scrape companies from screener.in")
     p.add_argument("tickers", nargs="*", help="tickers to scrape; default is the whole universe")
     p.add_argument("--all", action="store_true", help="scrape every stored company")
+    p.add_argument("--from-template", action="store_true",
+                   help="scrape the companies already listed in the workbook")
+    p.add_argument("--template", default=str(settings.template_path))
     p.add_argument("--consolidated", action="store_true", help="prefer consolidated statements")
     p.add_argument("--force", action="store_true", help="re-scrape even if already current")
     p.add_argument("--limit", type=int, help="stop after N companies")
@@ -101,9 +104,14 @@ def cmd_scrape(args) -> int:
 
     with Store(args.db) as store:
         store.create_schema()
-        tickers = args.tickers or (store.tickers() if args.all else [])
+        tickers = [t.upper() for t in args.tickers]
+        if not tickers and args.from_template:
+            tickers = workbook.tickers_in(args.template)
+        elif not tickers and args.all:
+            tickers = store.tickers()
         if not tickers:
-            log.error("no tickers given; pass them explicitly or use --all after `universe`")
+            log.error("no tickers given; pass them explicitly, or use "
+                      "--from-template / --all after `universe`")
             return 2
         if args.limit:
             tickers = tickers[: args.limit]

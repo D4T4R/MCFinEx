@@ -55,7 +55,27 @@ class TestFinancials:
         store.replace_financials("ACME", [
             (f"202{i}-03-31", "profit-loss", "EPS in Rs", float(i)) for i in range(5)
         ])
-        assert store.series("ACME", "profit-loss", "EPS in Rs", 2) == [4.0, 3.0]
+        assert store.series("ACME", "profit-loss", "EPS in Rs", limit=2) == [4.0, 3.0]
+
+    def test_falls_back_to_an_alias_label(self, store):
+        # Banks are labelled "Borrowing"; everyone else "Borrowings".
+        store.upsert_company("BANK", {})
+        store.replace_financials("BANK", [
+            ("2025-03-31", "balance-sheet", "Borrowing", 500.0),
+        ])
+        assert store.series("BANK", "balance-sheet", "Borrowings", "Borrowing") == [500.0]
+
+    def test_prefers_the_first_label_that_has_data(self, store):
+        store.upsert_company("ACME", {})
+        store.replace_financials("ACME", [
+            ("2025-03-31", "balance-sheet", "Borrowings", 100.0),
+            ("2025-03-31", "balance-sheet", "Borrowing", 999.0),
+        ])
+        assert store.series("ACME", "balance-sheet", "Borrowings", "Borrowing") == [100.0]
+
+    def test_no_alias_matches_returns_empty(self, store):
+        store.upsert_company("ACME", {})
+        assert store.series("ACME", "balance-sheet", "Nope", "AlsoNope") == []
 
     def test_replace_clears_the_previous_scrape(self, store):
         store.upsert_company("ACME", {})

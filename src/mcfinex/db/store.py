@@ -128,18 +128,27 @@ class Store:
             return False
         return row["last_updated_quarter"] != quarter
 
-    def series(self, ticker: str, statement: str, label: str, limit: int | None = None) -> list[float]:
-        """A line item's history, newest first -- the order the workbook expects."""
-        sql = (
-            "SELECT value FROM financials "
-            "WHERE ticker = ? AND statement = ? AND label = ? AND value IS NOT NULL "
-            "ORDER BY period DESC"
-        )
-        params: list[Any] = [ticker, statement, label]
-        if limit:
-            sql += " LIMIT ?"
-            params.append(limit)
-        return [r["value"] for r in self.conn.execute(sql, params)]
+    def series(self, ticker: str, statement: str, *labels: str, limit: int | None = None) -> list[float]:
+        """A line item's history, newest first -- the order the workbook expects.
+
+        Accepts several spellings and returns the first that has data, because
+        screener labels the same line differently for banks and NBFCs. See
+        :mod:`mcfinex.labels`.
+        """
+        for label in labels:
+            sql = (
+                "SELECT value FROM financials "
+                "WHERE ticker = ? AND statement = ? AND label = ? AND value IS NOT NULL "
+                "ORDER BY period DESC"
+            )
+            params: list[Any] = [ticker, statement, label]
+            if limit:
+                sql += " LIMIT ?"
+                params.append(limit)
+            values = [r["value"] for r in self.conn.execute(sql, params)]
+            if values:
+                return values
+        return []
 
     def valuation_fields(self, ticker: str, model: str) -> dict[str, float | None]:
         return {

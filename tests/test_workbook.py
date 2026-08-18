@@ -3,7 +3,7 @@ from openpyxl import Workbook, load_workbook
 
 from mcfinex.db.store import Store
 from mcfinex.export import workbook as wb
-from mcfinex.export.workbook import WorkbookError, populate
+from mcfinex.export.workbook import WorkbookError, populate, tickers_in
 
 
 @pytest.fixture
@@ -92,6 +92,37 @@ class TestPopulate:
             populate(store, bad, tmp_path / "out.xlsx")
 
 
+class TestTickersIn:
+    def test_reads_the_tracked_tickers(self, template):
+        assert tickers_in(template) == ["ACME"]
+
+    def test_skips_header_rows_and_blanks(self, tmp_path):
+        book = Workbook()
+        sheet = book.active
+        sheet.title = wb.DATA_SHEET
+        sheet.cell(3, wb.TICKER_COLUMN).value = "TICKER"   # header, must not appear
+        sheet.cell(4, wb.TICKER_COLUMN).value = " acme "   # trimmed and upper-cased
+        sheet.cell(5, wb.TICKER_COLUMN).value = "   "      # blank
+        sheet.cell(6, wb.TICKER_COLUMN).value = "BETA"
+        path = tmp_path / "t.xlsx"
+        book.save(path)
+        assert tickers_in(path) == ["ACME", "BETA"]
+
+    def test_deduplicates(self, tmp_path):
+        book = Workbook()
+        sheet = book.active
+        sheet.title = wb.DATA_SHEET
+        for row, value in enumerate(["ACME", "BETA", "ACME"], start=4):
+            sheet.cell(row, wb.TICKER_COLUMN).value = value
+        path = tmp_path / "t.xlsx"
+        book.save(path)
+        assert tickers_in(path) == ["ACME", "BETA"]
+
+    def test_missing_template_is_reported(self, tmp_path):
+        with pytest.raises(WorkbookError, match="template not found"):
+            tickers_in(tmp_path / "nope.xlsx")
+
+
 class TestSeriesLayout:
     def test_series_are_written_newest_first(self, store, template, tmp_path):
         out = tmp_path / "out.xlsx"
@@ -134,8 +165,122 @@ class TestSeriesLayout:
         assert read(out, 4, wb.EBIT) == 77.0
         assert read(out, 4, wb.FREE_CASHFLOW) == -5.0
 
-    def test_absent_values_leave_the_cell_alone(self, store, template, tmp_path):
-        # Better a blank than a -8888888 sentinel poisoning the averages.
+    def test_unsourceable_columns_are_left_alone(self, tmp_path, store):
+        # Industry P/E and promoter pledge have no screener source, so whatever
+        # the user already has must survive.
+        book = Workbook()
+        sheet = book.active
+        sheet.title = wb.DATA_SHEET
+        sheet.cell(4, wb.TICKER_COLUMN).value = "ACME"
+        sheet.cell(4, wb.INDUSTRY_PE).value = 29.47
+        sheet.cell(4, wb.PROMOTER_PLEDGE).value = 3.5
+        path = tmp_path / "keep.xlsx"
+        book.save(path)
+        out = tmp_path / "out.xlsx"
+        populate(store, path, out)
+        assert read(out, 4, wb.INDUSTRY_PE) == 29.47
+        assert read(out, 4, wb.PROMOTER_PLEDGE) == 3.5
+
+    def test_owned_column_with_no_data_is_cleared_not_left_stale(self, tmp_path, store):
+        # A row must be wholly fresh or blank; never fresh beside a 2022 value.
+        book = Workbook()
+        sheet = book.active
+        sheet.title = wb.DATA_SHEET
+        sheet.cell(4, wb.TICKER_COLUMN).value = "ACME"
+        sheet.cell(4, wb.INVENTORY_TURNOVER).value = -8888888
+        path = tmp_path / "stale.xlsx"
+        book.save(path)
+        out = tmp_path / "out.xlsx"
+        populate(store, path, out)
+        assert read(out, 4, wb.INVENTORY_TURNOVER) is None
+
+    def test_orphaned_ev_columns_are_cleared(self, tmp_path, store):
+        book = Workbook()
+        sheet = book.active
+        sheet.title = wb.DATA_SHEET
+        sheet.cell(4, wb.TICKER_COLUMN).value = "ACME"
+        for column in (47, 51, 53, 56):
+            sheet.cell(4, column).value = -8888888
+        path = tmp_path / "orphan.xlsx"
+        book.save(path)
+        out = tmp_path / "out.xlsx"
+        populate(store, path, out)
+        assert [read(out, 4, c) for c in (47, 51, 53, 56)] == [None, None, None, None]
+
+    def test_az_is_not_swept_up_by_the_orphan_clearing(self):
+        # AZ sits between the two orphaned spans and must survive, because
+        # BP=AZ*BO still consumes it.
+        spans = (wb.ORPHANED_EV_RANGE, wb.ORPHANED_MULTIPLE_RANGE)
+        assert not any(start <= wb.EV_EBITDA_MULTIPLE <= end for start, end in spans)
+
+    def test_az_receives_the_derived_multiple(self, tmp_path, template):
+        with Store(tmp_path / "m.db") as s:
+            s.create_schema()
+            s.upsert_company("ACME", {"name": "Acme", "last_updated": "2026-01-01"})
+            s.replace_valuations("ACME", "derived", {"ev_ebitda_multiple": 12.5})
+            out = tmp_path / "out.xlsx"
+            populate(s, template, out)
+        assert read(out, 4, wb.EV_EBITDA_MULTIPLE) == 12.5
+
+    def test_short_series_clears_the_trailing_cells(self, store, template, tmp_path):
+        # Only three EBITDA periods exist, so BH and BI must be blanked rather
+        # than left holding the template's =AY/BD formula over sentinels.
         out = tmp_path / "out.xlsx"
         populate(store, template, out)
-        assert read(out, 4, wb.INDUSTRY_PE) is None
+        assert read(out, 4, wb.EBITDA_FIRST + 3) is None
+        assert read(out, 4, wb.EBITDA_FIRST + 4) is None
+
+    def test_stale_formula_in_a_series_cell_is_overwritten(self, tmp_path, store):
+        book = Workbook()
+        sheet = book.active
+        sheet.title = wb.DATA_SHEET
+        sheet.cell(4, wb.TICKER_COLUMN).value = "ACME"
+        sheet.cell(4, wb.EBITDA_FIRST + 4).value = "=AY4/BD4"  # Java-era formula
+        path = tmp_path / "stale.xlsx"
+        book.save(path)
+        out = tmp_path / "out.xlsx"
+        populate(store, path, out)
+        assert read(out, 4, wb.EBITDA_FIRST + 4) is None
+
+
+class TestBankLayout:
+    """Screener labels banks differently; those rows must still populate."""
+
+    @pytest.fixture
+    def bank_store(self, tmp_path):
+        with Store(tmp_path / "bank.db") as s:
+            s.create_schema()
+            s.upsert_company("BANKX", {"name": "Bank X", "last_updated": "2026-01-01"})
+            s.replace_financials("BANKX", [
+                ("2025-03-31", "balance-sheet", "Reserves", 200.0),
+                ("2025-03-31", "balance-sheet", "Equity Capital", 10.0),
+                ("2025-03-31", "balance-sheet", "Other Liabilities", 100.0),
+                ("2025-03-31", "balance-sheet", "Deposits", 1300.0),
+                ("2025-03-31", "balance-sheet", "Borrowing", 230.0),
+                ("2025-03-31", "balance-sheet", "Total Liabilities", 1840.0),
+                ("2025-03-31", "profit-loss", "Financing Profit", 45.0),
+            ])
+            yield s
+
+    def test_singular_borrowing_is_matched(self, bank_store, template, tmp_path):
+        out = tmp_path / "out.xlsx"
+        populate(bank_store, template, out, tickers=["BANKX"])
+        assert read(out, 5, wb.DEBT) == 230.0
+        assert read(out, 5, wb.LONG_TERM_BORROWINGS) == 230.0
+
+    def test_deposits_are_folded_into_other_liabilities(self, bank_store, template, tmp_path):
+        out = tmp_path / "out.xlsx"
+        populate(bank_store, template, out, tickers=["BANKX"])
+        assert read(out, 5, wb.OTHER_LIABILITY) == 1400.0
+
+    def test_balance_sheet_reconciles(self, bank_store, template, tmp_path):
+        out = tmp_path / "out.xlsx"
+        populate(bank_store, template, out, tickers=["BANKX"])
+        total = sum(read(out, 5, c) for c in
+                    (wb.RESERVES, wb.EQUITY_CAPITAL, wb.OTHER_LIABILITY, wb.DEBT))
+        assert total == read(out, 5, wb.TOTAL_LIABILITY)
+
+    def test_financing_profit_fills_the_ebitda_series(self, bank_store, template, tmp_path):
+        out = tmp_path / "out.xlsx"
+        populate(bank_store, template, out, tickers=["BANKX"])
+        assert read(out, 5, wb.EBITDA_FIRST) == 45.0
