@@ -57,6 +57,7 @@ def metrics_for(store: Store, ticker: str, sector_medians: dict[str, float]) -> 
         return values[0] if values else None
 
     inventory = store.series(ticker, RATIOS, *labels.INVENTORY_DAYS, limit=2)
+    quarters_reported = len(store.series(ticker, "quarters", *labels.EPS))
     ev = store.valuation_fields(ticker, "ev_ebitda")
     eps_yearly = store.valuation_fields(ticker, "eps_yearly")
     eps_quarterly = store.valuation_fields(ticker, "eps_quarterly")
@@ -87,6 +88,7 @@ def metrics_for(store: Store, ticker: str, sector_medians: dict[str, float]) -> 
         dividend_yield=company["dividend_yield"],
         promoter_holding=latest("shareholding", *labels.PROMOTERS),
         is_financial=is_financial,
+        quarters_reported=quarters_reported,
         current_assets=derived.get("current_assets"),
         current_liabilities=derived.get("current_liabilities"),
         ev_ebitda_upside=ev.get("difference_pct"),

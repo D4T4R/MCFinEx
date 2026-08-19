@@ -119,8 +119,8 @@ class TestValuationSignals:
 
 
 class TestScoring:
-    def test_current_ratio_is_always_unknown(self):
-        # Screener has no current/non-current split; never guess it.
+    def test_current_ratio_is_unknown_until_enriched(self):
+        # The company page has no current/non-current split; never guess it.
         signal = screen(Metrics(ticker="T")).get("current_ratio")
         assert signal.verdict is Verdict.UNKNOWN
         assert signal.available is False
@@ -144,3 +144,41 @@ class TestScoring:
     def test_signal_keys_are_unique(self):
         keys = [s.key for s in screen(Metrics(ticker="T")).signals]
         assert len(keys) == len(set(keys))
+
+
+class TestNewlyListed:
+    """An IPO multiplies the share count, breaking per-share comparisons."""
+
+    def test_no_quarterly_history_means_newly_listed(self):
+        assert Metrics(ticker="T", quarters_reported=0).newly_listed
+        assert not Metrics(ticker="T", quarters_reported=4).newly_listed
+
+    def test_uncounted_is_not_treated_as_newly_listed(self):
+        # None means "not measured", which must not silently withhold signals.
+        assert not Metrics(ticker="T").newly_listed
+        assert screen(Metrics(ticker="T", pe_yearly_rerating=9.0)) \
+            .get("pe_yearly").verdict is Verdict.BUY
+
+    def test_rerating_is_withheld_for_a_new_listing(self):
+        # Milky Mist's yearly EPS reads 90.71 -> 0.69 across its IPO; the model
+        # would otherwise report that as a -37% re-rating.
+        m = Metrics(ticker="T", quarters_reported=0, pe_yearly_rerating=-37.0,
+                    pe_quarterly_rerating=12.0)
+        result = screen(m)
+        assert result.get("pe_yearly").verdict is Verdict.UNKNOWN
+        assert result.get("pe_quarterly").verdict is Verdict.UNKNOWN
+        assert "IPO" in result.get("pe_yearly").rule
+
+    def test_established_companies_are_unaffected(self):
+        m = Metrics(ticker="T", quarters_reported=8, pe_yearly_rerating=9.0)
+        assert screen(m).get("pe_yearly").verdict is Verdict.BUY
+
+    def test_withheld_signals_are_marked_unavailable(self):
+        signal = screen(Metrics(ticker="T", quarters_reported=0)).get("pe_yearly")
+        assert signal.available is False
+
+    def test_ev_ebitda_still_applies(self):
+        # EBITDA is an absolute figure, not per share, so the IPO does not
+        # invalidate it the way it invalidates EPS.
+        m = Metrics(ticker="T", quarters_reported=0, ev_ebitda_upside=30.0)
+        assert screen(m).get("ev_ebitda").verdict is Verdict.BUY

@@ -205,6 +205,13 @@ screener lacks is promoter pledge, for which promoter holding stands in.
 - **The workbook holds ~1,970 rows.** Its formulas stop there, so a full-universe
   export skips the overflow and says so rather than writing inputs into rows that
   compute nothing. Everything is in the database and the dashboard regardless.
+- **Recently listed companies** have their P/E re-rating signals withheld. An
+  IPO multiplies the share count, so pre-listing EPS is not comparable with
+  post-listing EPS: Milky Mist's yearly series reads 90.71 then 0.69, which the
+  model would otherwise score as a collapse. Detected by having no quarterly
+  results yet. EV/EBITDA still applies, since EBITDA is an absolute figure
+  rather than a per-share one. New listings arrive on their own through
+  `universe`, which reads each day's bhavcopy.
 - **Industry P/E (AM)** is not on the screener company page — the peers table is
   loaded separately. The column is left at whatever it already held.
 - **Enterprise value history (AU–AY) and EV/EBITDA history (AZ–BD)** are not
@@ -232,7 +239,7 @@ src/mcfinex/
   sources/screener.py  company page parser
   sources/nse.py       bhavcopy loader
   export/workbook.py   SSP workbook writer
-tests/               198 tests; screener parsing runs off a saved fixture,
+tests/               205 tests; screener parsing runs off a saved fixture,
                      the dashboard off Streamlit's AppTest harness
 ```
 

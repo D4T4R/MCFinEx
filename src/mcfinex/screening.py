@@ -67,6 +67,12 @@ class Metrics:
     # Only present once the balance-sheet schedules have been fetched.
     current_assets: float | None = None
     current_liabilities: float | None = None
+    #: Quarterly results reported since listing. Zero means the company has not
+    #: yet reported as a listed entity, so its per-share history spans the IPO
+    #: and is not comparable across periods. ``None`` means simply not counted,
+    #: which must not be mistaken for "no history" -- only a measured zero
+    #: withholds a signal.
+    quarters_reported: int | None = None
     #: Banks, NBFCs and insurers. EV/EBITDA is not a meaningful way to value
     #: them -- borrowings are raw material, not capital structure -- so the
     #: EV-based signals are withheld rather than reported as a number.
@@ -76,6 +82,11 @@ class Metrics:
     ev_ebitda_upside_with_debt: float | None = None
     pe_yearly_rerating: float | None = None
     pe_quarterly_rerating: float | None = None
+
+    @property
+    def newly_listed(self) -> bool:
+        """No quarterly results yet, so per-share history straddles the IPO."""
+        return self.quarters_reported == 0
 
 
 @dataclass
@@ -290,8 +301,14 @@ def _ev_ebitda_with_debt(m: Metrics) -> Signal:
                    m.ev_ebitda_upside_with_debt, ">10% BUY, <0% SELL")
 
 
-def _rerating(key: str, label: str, pct: float | None) -> Signal:
+def _rerating(key: str, label: str, pct: float | None, *, newly_listed: bool = False) -> Signal:
     # The workbook's CT and DL used a -5/+5 band on the P/E re-rating.
+    if newly_listed:
+        # An IPO multiplies the share count, so pre-listing EPS is not
+        # comparable with post-listing EPS. Milky Mist's series reads
+        # 90.71 -> 0.69, which the model would otherwise call a collapse.
+        return Signal(key, label, Verdict.UNKNOWN, None,
+                      "newly listed: per-share history spans the IPO", available=False)
     if pct is None:
         return Signal(key, label, Verdict.UNKNOWN, None, "not computable", available=False)
     verdict = Verdict.BUY if pct > 5 else Verdict.SELL if pct < -5 else Verdict.HOLD
@@ -299,8 +316,10 @@ def _rerating(key: str, label: str, pct: float | None) -> Signal:
 
 
 def _pe_yearly(m: Metrics) -> Signal:
-    return _rerating("pe_yearly", "P/E re-rating % (yearly)", m.pe_yearly_rerating)
+    return _rerating("pe_yearly", "P/E re-rating % (yearly)", m.pe_yearly_rerating,
+                     newly_listed=m.newly_listed)
 
 
 def _pe_quarterly(m: Metrics) -> Signal:
-    return _rerating("pe_quarterly", "P/E re-rating % (quarterly)", m.pe_quarterly_rerating)
+    return _rerating("pe_quarterly", "P/E re-rating % (quarterly)", m.pe_quarterly_rerating,
+                     newly_listed=m.newly_listed)
