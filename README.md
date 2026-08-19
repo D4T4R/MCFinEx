@@ -58,6 +58,13 @@ what traded that day, so one file undercounts: 2026-08-14 held 2,713 equity
 listings where a week unioned held 2,867. The 154 missing were illiquid small
 caps that had simply not traded, not new listings.
 
+Screener rate-limits. `scrape` shares one adaptive throttle across the run: a
+429 doubles the delay for every request that follows and is retried with
+backoff, honouring `Retry-After`. Don't set `MCFINEX_REQUEST_DELAY` below 1.0 —
+a full-universe run at 0.7s was throttled from its 71st company and lost 716 of
+2,258. Rate-limited companies are reported separately from missing ones; re-run
+the same command to pick them up.
+
 Run `prices` after `scrape`. Screener displays the price rounded to the nearest
 rupee — a stock closing at 205.58 is shown as 206 — and column AJ drives the
 current P/E and every target price, so `prices` overwrites it with the exact NSE
@@ -72,7 +79,7 @@ Settings are environment variables, all optional:
 | `MCFINEX_DB` | `data/stocks.db` |
 | `MCFINEX_TEMPLATE` | `~/Downloads/SSP_Working_merged.xlsx` |
 | `MCFINEX_EXPORT` | `data/SSP_Working_populated.xlsx` |
-| `MCFINEX_REQUEST_DELAY` | `1.0` seconds between screener requests |
+| `MCFINEX_REQUEST_DELAY` | `1.0` seconds between screener requests (see below) |
 
 ## Workbook column map
 
@@ -198,7 +205,7 @@ src/mcfinex/
   sources/screener.py  company page parser
   sources/nse.py       bhavcopy loader
   export/workbook.py   SSP workbook writer
-tests/               168 tests; screener parsing runs off a saved fixture,
+tests/               181 tests; screener parsing runs off a saved fixture,
                      the dashboard off Streamlit's AppTest harness
 ```
 

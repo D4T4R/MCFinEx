@@ -115,7 +115,10 @@ def cmd_universe(args) -> int:
 def cmd_scrape(args) -> int:
     quarter = str(current_quarter())
     session = requests.Session()
-    failures = 0
+    # One throttle for the whole run: a 429 on any company slows every request
+    # after it, instead of each ticker rediscovering the limit for itself.
+    pace = screener.Throttle(settings.request_delay)
+    failures = rate_limited = 0
 
     with Store(args.db) as store:
         store.create_schema()
@@ -142,11 +145,17 @@ def cmd_scrape(args) -> int:
                     consolidated=args.consolidated,
                     session=session,
                     timeout=settings.request_timeout,
-                    delay=settings.request_delay,
+                    throttle=pace,
                 )
                 company = screener.parse(html, ticker, consolidated=args.consolidated)
                 persist(store, company)
                 log.info("[%d/%d] %s  %s", index, len(tickers), ticker, company.name)
+            except screener.RateLimited as exc:
+                # Being throttled says nothing about the company, so keep it
+                # distinct from a 404 -- these are worth retrying later.
+                failures += 1
+                rate_limited += 1
+                log.warning("[%d/%d] %s: %s", index, len(tickers), ticker, exc)
             except (screener.ScreenerError, requests.RequestException) as exc:
                 # One dead ticker must not end the run; the Java build printed a
                 # stack trace and carried on with half-populated state.
@@ -154,7 +163,10 @@ def cmd_scrape(args) -> int:
                 log.warning("[%d/%d] %s failed: %s", index, len(tickers), ticker, exc)
 
     if failures:
-        log.warning("%d company/companies failed", failures)
+        log.warning("%d failed (%d rate limited, %d missing). Final delay %.1fs.",
+                    failures, rate_limited, failures - rate_limited, pace.delay)
+        if rate_limited:
+            log.warning("re-run the same command to pick up the throttled ones")
     return 1 if failures and failures == len(tickers) else 0
 
 

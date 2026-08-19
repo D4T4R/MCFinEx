@@ -34,6 +34,44 @@ class ScreenerError(RuntimeError):
     """Raised when a page cannot be fetched or is not a company page."""
 
 
+class RateLimited(ScreenerError):
+    """Screener returned 429 and the retries were exhausted."""
+
+
+class Throttle:
+    """A self-adjusting delay shared across a scrape run.
+
+    Screener rate-limits, and a fixed delay cannot know where the ceiling is:
+    a run at 0.7s was throttled from the 71st company onwards and kept hammering
+    for 28 minutes, losing 716 of them. So the delay backs off hard on a 429 and
+    recovers slowly on sustained success, settling near whatever the service
+    will actually tolerate.
+    """
+
+    def __init__(self, delay: float = 1.0, *, maximum: float = 60.0):
+        self.base = delay
+        self.delay = delay
+        self.maximum = maximum
+        self._good_streak = 0
+
+    def wait(self) -> None:
+        if self.delay:
+            time.sleep(self.delay)
+
+    def penalise(self) -> float:
+        """Double the delay after a rejection and report the new value."""
+        self._good_streak = 0
+        self.delay = min(max(self.delay * 2, 1.0), self.maximum)
+        return self.delay
+
+    def reward(self) -> None:
+        """Ease back towards the base delay after a clean run of requests."""
+        self._good_streak += 1
+        if self._good_streak >= 20 and self.delay > self.base:
+            self.delay = max(self.base, self.delay * 0.8)
+            self._good_streak = 0
+
+
 def to_number(text: str | None) -> float | None:
     """Parse a screener cell into a float, or ``None`` when there is no value.
 
@@ -136,17 +174,47 @@ class Company:
 
 
 def fetch(ticker: str, *, consolidated: bool = False, session: requests.Session | None = None,
-          timeout: float = 20.0, delay: float = 1.0) -> str:
-    """Download a company page. ``delay`` throttles us to be a polite client."""
+          timeout: float = 20.0, delay: float = 1.0, throttle: Throttle | None = None,
+          retries: int = 4) -> str:
+    """Download a company page, backing off when screener pushes back.
+
+    A 429 is a request to slow down, not a missing company, so it is retried
+    with an exponential backoff that honours ``Retry-After`` when sent. Pass a
+    shared :class:`Throttle` across a run so one rejection slows every
+    subsequent request rather than only this one.
+    """
     path = f"/company/{ticker.upper()}/" + ("consolidated/" if consolidated else "")
     sess = session or requests.Session()
-    if delay:
-        time.sleep(delay)
-    resp = sess.get(BASE_URL + path, headers={"User-Agent": USER_AGENT}, timeout=timeout)
-    if resp.status_code == 404:
-        raise ScreenerError(f"{ticker}: no such company on screener.in")
-    resp.raise_for_status()
-    return resp.text
+    pace = throttle if throttle is not None else Throttle(delay)
+
+    for attempt in range(retries + 1):
+        pace.wait()
+        resp = sess.get(BASE_URL + path, headers={"User-Agent": USER_AGENT}, timeout=timeout)
+        if resp.status_code == 404:
+            raise ScreenerError(f"{ticker}: no such company on screener.in")
+        if resp.status_code == 429:
+            slowed = pace.penalise()
+            if attempt == retries:
+                raise RateLimited(
+                    f"{ticker}: rate limited after {retries} retries (delay now {slowed:.1f}s)"
+                )
+            time.sleep(_retry_after(resp, fallback=slowed))
+            continue
+        resp.raise_for_status()
+        pace.reward()
+        return resp.text
+    raise RateLimited(f"{ticker}: rate limited")  # unreachable, keeps type checkers happy
+
+
+def _retry_after(resp: requests.Response, *, fallback: float) -> float:
+    """Seconds to wait, preferring the server's own instruction."""
+    header = resp.headers.get("Retry-After")
+    if header:
+        try:
+            return min(float(header), 300.0)
+        except ValueError:
+            pass
+    return fallback
 
 
 def parse(html: str, ticker: str, *, consolidated: bool = False) -> Company:
