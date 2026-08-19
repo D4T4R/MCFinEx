@@ -92,6 +92,53 @@ class TestPopulate:
             populate(store, bad, tmp_path / "out.xlsx")
 
 
+class TestFormulaRowLimit:
+    """Appending past the template's formula range produces dead rows."""
+
+    def _template_with_formulas(self, tmp_path, last_row):
+        book = Workbook()
+        sheet = book.active
+        sheet.title = wb.DATA_SHEET
+        for row in range(4, last_row + 1):
+            sheet.cell(row, wb.TARGET_PRICE).value = f"=BP{row}/BS{row}"
+        path = tmp_path / "limited.xlsx"
+        book.save(path)
+        return path
+
+    def _store_with(self, tmp_path, tickers):
+        s = Store(tmp_path / "many.db")
+        s.create_schema()
+        for t in tickers:
+            s.upsert_company(t, {"name": t.title(), "last_updated": "2026-01-01"})
+        return s
+
+    def test_companies_beyond_the_formula_range_are_skipped(self, tmp_path):
+        template = self._template_with_formulas(tmp_path, 6)  # rows 4,5,6
+        store = self._store_with(tmp_path, ["AAA", "BBB", "CCC", "DDD", "EEE"])
+        _, updated, appended = populate(store, template, tmp_path / "out.xlsx")
+        store.close()
+        assert (updated, appended) == (0, 3)  # only the formula rows are filled
+
+    def test_a_sheet_with_no_formulas_is_not_capped(self, tmp_path):
+        book = Workbook()
+        book.active.title = wb.DATA_SHEET
+        bare = tmp_path / "bare.xlsx"
+        book.save(bare)
+        store = self._store_with(tmp_path, ["AAA", "BBB", "CCC"])
+        _, _, appended = populate(store, bare, tmp_path / "out.xlsx")
+        store.close()
+        assert appended == 3
+
+    def test_skipped_rows_are_left_empty_not_half_written(self, tmp_path):
+        template = self._template_with_formulas(tmp_path, 5)
+        store = self._store_with(tmp_path, ["AAA", "BBB", "CCC"])
+        out = tmp_path / "out.xlsx"
+        populate(store, template, out)
+        store.close()
+        assert read(out, 6, wb.TICKER_COLUMN) is None
+        assert read(out, 6, wb.COMPANY_NAME) is None
+
+
 class TestTickersIn:
     def test_reads_the_tracked_tickers(self, template):
         assert tickers_in(template) == ["ACME"]

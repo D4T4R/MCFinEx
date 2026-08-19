@@ -32,6 +32,12 @@ USER_AGENT = (
 # other instruments that have no company page on screener.
 EQUITY_SERIES = frozenset({"EQ", "BE"})
 
+# ETFs and mutual fund units trade in the EQ series but are not companies and
+# have no financial statements to screen -- 342 of them in a full universe.
+# Indian ISINs encode this: INE is an equity share, INF a fund unit. The Java
+# original filtered on exactly this and the check was lost in the rewrite.
+FUND_ISIN_PREFIX = "INF"
+
 
 class NseError(RuntimeError):
     pass
@@ -124,12 +130,13 @@ def parse_bhavcopy(payload: bytes) -> list[Listing]:
         if (row.get("SctySrs") or "").strip().upper() not in EQUITY_SERIES:
             continue
         ticker = (row.get("TckrSymb") or "").strip().upper()
-        if not ticker:
+        isin = (row.get("ISIN") or "").strip()
+        if not ticker or isin.startswith(FUND_ISIN_PREFIX):
             continue
         listings.append(
             Listing(
                 ticker=ticker,
-                isin=(row.get("ISIN") or "").strip(),
+                isin=isin,
                 name=(row.get("FinInstrmNm") or "").strip(),
                 close=_float(row.get("ClsPric")),
             )

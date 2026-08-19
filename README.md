@@ -38,7 +38,8 @@ python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
 
 ```bash
 mcfinex init                          # create the SQLite schema
-mcfinex universe                      # seed ~2900 tickers + ISINs (unions 7 sessions)
+mcfinex universe                      # seed ~2550 companies + ISINs (unions 7 sessions)
+mcfinex prune --apply                 # drop ETFs and fund units (not companies)
 mcfinex scrape RELIANCE TCS           # scrape named companies
 mcfinex scrape --from-template        # scrape the companies tracked in the workbook
 mcfinex scrape --all --limit 50       # or work through the seeded universe
@@ -178,6 +179,9 @@ Ported behaviour, except where the Java was demonstrably wrong:
   same reason — there is no source for them. Columns `T = R/S` (current ratio)
   and `X = W-S` (capital employed) therefore do not compute, so `Y` (ROCE) is
   unreliable. Use screener's own ROCE, stored on the company row, instead.
+- **The workbook holds ~1,970 rows.** Its formulas stop there, so a full-universe
+  export skips the overflow and says so rather than writing inputs into rows that
+  compute nothing. Everything is in the database and the dashboard regardless.
 - **Industry P/E (AM)** is not on the screener company page — the peers table is
   loaded separately. The column is left at whatever it already held.
 - **Enterprise value history (AU–AY) and EV/EBITDA history (AZ–BD)** are not

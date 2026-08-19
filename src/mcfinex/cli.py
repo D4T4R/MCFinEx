@@ -60,6 +60,10 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--limit", type=int, help="stop after N companies")
     p.set_defaults(handler=cmd_scrape)
 
+    p = sub.add_parser("prune", help="remove ETFs and fund units that are not companies")
+    p.add_argument("--apply", action="store_true", help="actually delete; default lists only")
+    p.set_defaults(handler=cmd_prune)
+
     p = sub.add_parser("screen", help="rank companies by BUY signals")
     p.add_argument("-n", "--limit", type=int, default=25)
     p.add_argument("--min-buys", type=int, default=0)
@@ -168,6 +172,25 @@ def cmd_scrape(args) -> int:
         if rate_limited:
             log.warning("re-run the same command to pick up the throttled ones")
     return 1 if failures and failures == len(tickers) else 0
+
+
+def cmd_prune(args) -> int:
+    """Drop instruments that arrived via the bhavcopy but are not companies."""
+    with Store(args.db) as store:
+        store.create_schema()
+        targets = store.fund_unit_tickers()
+        if not targets:
+            log.info("nothing to prune")
+            return 0
+        if not args.apply:
+            log.info("%d fund units would be removed, e.g. %s",
+                     len(targets), ", ".join(targets[:6]))
+            log.info("re-run with --apply to delete them")
+            return 0
+        removed = store.remove(targets)
+        store.conn.execute("VACUUM")
+    log.info("removed %d fund units", removed)
+    return 0
 
 
 def cmd_screen(args) -> int:

@@ -19,6 +19,7 @@ P/E, so Y5/Q5 are the latest period.
 
 from __future__ import annotations
 
+import logging
 import shutil
 from pathlib import Path
 
@@ -26,6 +27,8 @@ from openpyxl import load_workbook
 
 from .. import labels
 from ..db.store import Store
+
+log = logging.getLogger("mcfinex")
 
 DATA_SHEET = "Data"
 FIRST_DATA_ROW = 4
@@ -71,6 +74,7 @@ LONG_TERM_BORROWINGS = 69  # BQ
 SHARES_OUTSTANDING = 71   # BS
 EPS_YEARLY_FIRST = 82     # CD..CH  (Y5..Y1)
 EPS_QUARTERLY_FIRST = 99  # CU..CY  (Q5..Q1)
+TARGET_PRICE = 72         # BT, a formula column used to find the template's limit
 MARKET_CAPITAL = 117      # DM
 SECTOR = 118              # DN
 LAST_UPDATED_QUARTER = 119  # DO
@@ -109,11 +113,18 @@ def populate(store: Store, template: str | Path, output: str | Path,
 
     index = _ticker_index(sheet)
     next_free = _first_blank_row(sheet)
+    limit = _last_formula_row(sheet)
 
     updated = appended = 0
+    skipped: list[str] = []
     for ticker in (tickers if tickers is not None else store.scraped_tickers()):
         row = index.get(ticker)
         if row is None:
+            if next_free > limit:
+                # Out of pre-formulated rows. Better to report the company as
+                # skipped than to write inputs into a row that computes nothing.
+                skipped.append(ticker)
+                continue
             row = next_free
             next_free += 1
             sheet.cell(row, TICKER_COLUMN).value = ticker
@@ -123,6 +134,13 @@ def populate(store: Store, template: str | Path, output: str | Path,
         _write_company(sheet, row, store, ticker)
 
     book.save(target)
+    if skipped:
+        log.warning(
+            "%d companies did not fit: the template has formulas only to row %d. "
+            "They are all in the database and the dashboard; extend the formulas "
+            "down or pass explicit tickers. First few: %s",
+            len(skipped), limit, ", ".join(skipped[:5]),
+        )
     return target, updated, appended
 
 
@@ -188,6 +206,27 @@ def _first_blank_row(sheet) -> int:
         if value is None or (isinstance(value, str) and not value.strip()):
             return row
     return sheet.max_row + 1
+
+
+def _last_formula_row(sheet) -> int:
+    """The last row whose valuation formulas are actually filled in.
+
+    The template carries formulas down to a fixed row. Appending past it writes
+    inputs into a row with nothing to compute them, which looks populated but
+    silently produces no target price -- worse than leaving the company out.
+
+    A sheet with no formulas anywhere is not a formula-driven template, so it is
+    left uncapped rather than treated as full.
+    """
+    for row in range(sheet.max_row, FIRST_DATA_ROW - 1, -1):
+        value = sheet.cell(row, TARGET_PRICE).value
+        if isinstance(value, str) and value.startswith("="):
+            return row
+    return NO_FORMULA_LIMIT
+
+
+#: Sentinel for "this sheet has no formula range to overrun".
+NO_FORMULA_LIMIT = 1_000_000
 
 
 def _write_company(sheet, row: int, store: Store, ticker: str) -> None:

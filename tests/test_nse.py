@@ -42,6 +42,16 @@ class TestParseBhavcopy:
         gamma = [l for l in parse_bhavcopy(payload) if l.ticker == "GAMMA"][0]
         assert gamma.close is None
 
+    def test_fund_units_are_excluded(self):
+        # ETFs trade in the EQ series but have no financials. Indian ISINs
+        # distinguish them: INE is an equity share, INF a fund unit.
+        payload = make_zip([HEADER, *ROWS,
+                            "2026-08-14,CM,INF209KB1altered,ABSLNN50ET,EQ,Nifty ETF,78.32"])
+        assert "ABSLNN50ET" not in [l.ticker for l in parse_bhavcopy(payload)]
+
+    def test_equity_isins_are_kept(self):
+        assert [l.ticker for l in parse_bhavcopy(make_zip([HEADER, ROWS[0]]))] == ["ACME"]
+
     def test_archive_without_csv_is_reported(self):
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, "w") as archive:

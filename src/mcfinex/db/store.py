@@ -136,6 +136,30 @@ class Store:
 
     # ---------------------------------------------------------------- reads
 
+    def fund_unit_tickers(self) -> list[str]:
+        """Stored rows that are ETFs or mutual fund units, not companies.
+
+        Identified by the ISIN prefix: INE is an equity share, INF a fund unit.
+        These trade in the EQ series so they arrive through the bhavcopy, but
+        they have no financial statements and cannot be screened.
+        """
+        return [
+            r["ticker"] for r in self.conn.execute(
+                "SELECT ticker FROM companies WHERE isin LIKE 'INF%' ORDER BY ticker"
+            )
+        ]
+
+    def remove(self, tickers: Sequence[str]) -> int:
+        """Delete companies and everything hanging off them."""
+        if not tickers:
+            return 0
+        rows = [(t,) for t in tickers]
+        with self.conn:
+            self.conn.executemany("DELETE FROM financials WHERE ticker = ?", rows)
+            self.conn.executemany("DELETE FROM valuations WHERE ticker = ?", rows)
+            self.conn.executemany("DELETE FROM companies WHERE ticker = ?", rows)
+        return len(tickers)
+
     def tickers(self, *, only_scannable: bool = True) -> list[str]:
         sql = "SELECT ticker FROM companies"
         if only_scannable:
