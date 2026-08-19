@@ -78,6 +78,15 @@ class TestRenders:
     def test_download_button_offered(self, app):
         assert app.button  # refresh + download render as buttons
 
+    def test_numeric_columns_render_as_numbers_not_format_strings(self, app):
+        # Styler.format wants str.format specs; a printf spec like "%.2f" is
+        # emitted verbatim, so every price displayed as the text "%.2f".
+        from mcfinex.ui import dashboard
+
+        for column, spec in dashboard.NUMERIC_FORMATS.items():
+            assert "%" not in spec, f"{column} uses a printf spec"
+            assert spec.format(1234.5678)
+
 
 class TestFilters:
     def test_minimum_buy_slider_narrows_the_list(self, app):

@@ -39,6 +39,19 @@ VALUATION_LABELS = [
     "P/E re-rating % (yearly)", "P/E re-rating % (quarterly)",
 ]
 
+# pandas Styler.format takes str.format specs, not printf ones. A printf spec
+# such as "%.2f" is passed through verbatim, so every price rendered as the
+# literal text "%.2f" rather than a number.
+NUMERIC_FORMATS = {
+    "Price": "{:,.2f}",
+    "Upside %": "{:+.1f}",
+    "EV/EBITDA target": "{:,.1f}",
+    "Entry 3/4": "{:,.1f}",
+    "Entry 2/3": "{:,.1f}",
+    "PE yearly target": "{:,.1f}",
+    "PE quarterly target": "{:,.1f}",
+}
+
 
 @st.cache_data(show_spinner="Screening companies...")
 def load(db_path: str) -> tuple[pd.DataFrame, dict]:
@@ -119,15 +132,10 @@ def _overview(frame: pd.DataFrame, filtered: pd.DataFrame) -> None:
 def _table(filtered: pd.DataFrame) -> None:
     st.subheader("Screen")
     verdict_cols = [c for c in filtered.columns if c in FUNDAMENTAL_LABELS + VALUATION_LABELS]
-    numeric = {
-        "Price": "%.2f", "Upside %": "%.1f", "EV/EBITDA target": "%.1f",
-        "Entry 3/4": "%.1f", "Entry 2/3": "%.1f",
-        "PE yearly target": "%.1f", "PE quarterly target": "%.1f",
-    }
     styled = (
         filtered.sort_values(["BUY signals", "SELL signals"], ascending=[False, True])
         .style.map(lambda v: VERDICT_COLOUR.get(v, ""), subset=verdict_cols)
-        .format(numeric, na_rep="-")
+        .format(NUMERIC_FORMATS, na_rep="-")
     )
     st.dataframe(styled, width='stretch', height=520)
     st.download_button(
@@ -175,14 +183,22 @@ def _drilldown(filtered: pd.DataFrame, detail: dict) -> None:
         st.markdown("**Entry prices**")
         st.dataframe(
             pd.DataFrame([
-                {"Basis": "Target", "Price": row.target_ev_ebitda},
-                {"Basis": "Entry 3/4", "Price": row.entry_3by4},
-                {"Basis": "Entry 2/3", "Price": row.entry_2by3},
-                {"Basis": "P/E yearly target", "Price": row.target_pe_yearly},
-                {"Basis": "P/E quarterly target", "Price": row.target_pe_quarterly},
+                {"Basis": basis, "Price": _round(price)}
+                for basis, price in (
+                    ("Target", row.target_ev_ebitda),
+                    ("Entry 3/4", row.entry_3by4),
+                    ("Entry 2/3", row.entry_2by3),
+                    ("P/E yearly target", row.target_pe_yearly),
+                    ("P/E quarterly target", row.target_pe_quarterly),
+                )
             ]),
             width='stretch', hide_index=True,
         )
+
+
+def _round(value: float | None) -> float | None:
+    """Prices to the paisa. Raw model output carries float noise (232.7939...)."""
+    return None if value is None else round(value, 2)
 
 
 def _enrich_control(ticker: str, row) -> None:
