@@ -38,7 +38,7 @@ python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
 
 ```bash
 mcfinex init                          # create the SQLite schema
-mcfinex universe                      # seed ~2000 tickers + ISINs from the NSE bhavcopy
+mcfinex universe                      # seed ~2900 tickers + ISINs (unions 7 sessions)
 mcfinex scrape RELIANCE TCS           # scrape named companies
 mcfinex scrape --from-template        # scrape the companies tracked in the workbook
 mcfinex scrape --all --limit 50       # or work through the seeded universe
@@ -52,6 +52,11 @@ mcfinex export                        # optional: fill a copy of the workbook
 
 Re-running `scrape` skips anything already checked today or already carrying the
 current quarter's results; `--force` overrides that.
+
+`universe` unions several trading sessions on purpose. A bhavcopy lists only
+what traded that day, so one file undercounts: 2026-08-14 held 2,713 equity
+listings where a week unioned held 2,867. The 154 missing were illiquid small
+caps that had simply not traded, not new listings.
 
 Run `prices` after `scrape`. Screener displays the price rounded to the nearest
 rupee — a stock closing at 205.58 is shown as 206 — and column AJ drives the
@@ -193,7 +198,7 @@ src/mcfinex/
   sources/screener.py  company page parser
   sources/nse.py       bhavcopy loader
   export/workbook.py   SSP workbook writer
-tests/               164 tests; screener parsing runs off a saved fixture,
+tests/               168 tests; screener parsing runs off a saved fixture,
                      the dashboard off Streamlit's AppTest harness
 ```
 

@@ -44,6 +44,9 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("universe", help="seed tickers and ISINs from the NSE bhavcopy")
     p.add_argument("--limit", type=int, help="only keep the first N listings")
+    p.add_argument("--days", type=int, default=7,
+                   help="union this many trading sessions (a single day misses "
+                        "illiquid stocks that did not trade)")
     p.set_defaults(handler=cmd_universe)
 
     p = sub.add_parser("scrape", help="scrape companies from screener.in")
@@ -92,11 +95,11 @@ def cmd_init(args) -> int:
 
 def cmd_universe(args) -> int:
     session = requests.Session()
-    day, payload = nse.latest_bhavcopy(session=session)
-    listings = nse.parse_bhavcopy(payload)
+    listings, sessions = nse.universe(days=args.days, session=session)
     if args.limit:
         listings = listings[: args.limit]
-    log.info("bhavcopy for %s: %d equity listings", day, len(listings))
+    log.info("%d equity listings across %d sessions (%s to %s)",
+             len(listings), len(sessions), min(sessions), max(sessions))
 
     with Store(args.db) as store:
         store.create_schema()

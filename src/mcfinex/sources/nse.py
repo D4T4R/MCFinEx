@@ -80,6 +80,37 @@ def latest_bhavcopy(*, on: date | None = None, max_lookback: int = 10,
     )
 
 
+def universe(*, days: int = 7, on: date | None = None,
+             session: requests.Session | None = None) -> tuple[list[Listing], list[date]]:
+    """The traded universe, unioned over the last ``days`` trading sessions.
+
+    A bhavcopy only lists instruments that actually traded that day, so any
+    single file undercounts: 2026-08-14 held 2,713 equity listings while a week
+    unioned held 2,867. The gap is illiquid small caps that go days without a
+    trade, not new listings. The newest price seen for a ticker wins.
+
+    Returns the listings and the sessions actually found.
+    """
+    sess = session or requests.Session()
+    start = on or date.today()
+    found: dict[str, Listing] = {}
+    sessions: list[date] = []
+    # Walk backwards so newer sessions are seen first; older ones only fill gaps.
+    for offset in range(days * 2):
+        if len(sessions) >= days:
+            break
+        day = start - timedelta(days=offset)
+        payload = fetch_bhavcopy(day, session=sess)
+        if payload is None:
+            continue
+        sessions.append(day)
+        for listing in parse_bhavcopy(payload):
+            found.setdefault(listing.ticker, listing)
+    if not sessions:
+        raise NseError(f"no bhavcopy found in the {days * 2} days before {start}")
+    return sorted(found.values(), key=lambda l: l.ticker), sessions
+
+
 def parse_bhavcopy(payload: bytes) -> list[Listing]:
     """Extract the equity rows from a bhavcopy ZIP."""
     with zipfile.ZipFile(io.BytesIO(payload)) as archive:
