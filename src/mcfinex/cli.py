@@ -11,6 +11,7 @@ import requests
 
 from .config import settings
 from .db.store import Store
+from .enrich import enrich
 from .export import workbook
 from .pipeline import persist, revalue
 from .report import screen_all
@@ -59,6 +60,10 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--force", action="store_true", help="re-scrape even if already current")
     p.add_argument("--limit", type=int, help="stop after N companies")
     p.set_defaults(handler=cmd_scrape)
+
+    p = sub.add_parser("enrich", help="fetch balance-sheet detail for named companies")
+    p.add_argument("tickers", nargs="+", help="companies to enrich")
+    p.set_defaults(handler=cmd_enrich)
 
     p = sub.add_parser("prune", help="remove ETFs and fund units that are not companies")
     p.add_argument("--apply", action="store_true", help="actually delete; default lists only")
@@ -172,6 +177,35 @@ def cmd_scrape(args) -> int:
         if rate_limited:
             log.warning("re-run the same command to pick up the throttled ones")
     return 1 if failures and failures == len(tickers) else 0
+
+
+def cmd_enrich(args) -> int:
+    """Pull the schedules behind the collapsed balance-sheet rows.
+
+    Kept out of `scrape` because it is three extra requests per company and
+    would roughly double a full-universe run. Enriching re-values the company,
+    since cash changes its enterprise value and every target derived from it.
+    """
+    session = requests.Session()
+    pace = screener.Throttle(settings.request_delay)
+    done = 0
+    with Store(args.db) as store:
+        store.create_schema()
+        for ticker in (t.upper() for t in args.tickers):
+            try:
+                result = enrich(store, ticker, session=session, throttle=pace)
+            except (screener.ScreenerError, requests.RequestException) as exc:
+                log.warning("%s failed: %s", ticker, exc)
+                continue
+            if not result.found_anything:
+                log.warning("%s: no schedules available", ticker)
+                continue
+            done += 1
+            log.info("%s  cash=%s current assets=%s current liabilities=%s%s",
+                     ticker, result.cash, result.current_assets,
+                     result.current_liabilities, "  (revalued)" if result.revalued else "")
+    log.info("enriched %d companies", done)
+    return 0
 
 
 def cmd_prune(args) -> int:

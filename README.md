@@ -44,6 +44,7 @@ mcfinex scrape RELIANCE TCS           # scrape named companies
 mcfinex scrape --from-template        # scrape the companies tracked in the workbook
 mcfinex scrape --all --limit 50       # or work through the seeded universe
 mcfinex prices                        # refresh closing prices from the NSE bhavcopy
+mcfinex enrich RELIANCE TCS           # pull balance-sheet detail for named companies
 mcfinex show RELIANCE                 # print stored values and valuations
 mcfinex screen --min-buys 6           # rank by BUY signals
 mcfinex screen --csv screen.csv       # or dump the whole screen
@@ -168,6 +169,29 @@ Ported behaviour, except where the Java was demonstrably wrong:
 - **Hardcoded paths.** `E:\Selenium\chromedriver.exe`, `E://StockData.csv` and
   `jdbc:h2:tcp://localhost/~/stockDB` with `sa`/`sa` are gone.
 
+## On-demand detail
+
+The company page collapses detail into `Other Assets`, `Other Liabilities` and
+`Borrowings`. Screener expands them through an undocumented JSON endpoint,
+`/api/company/{id}/schedules/`, which supplies three things the page does not:
+
+| | Why it matters |
+|---|---|
+| Cash equivalents | Enterprise value can net off cash instead of being `market cap + debt` |
+| Current assets and liabilities | The current ratio becomes computable at all |
+| Long vs short term borrowings | The long-term figure stops being total debt |
+
+Three extra requests per company, so it is deliberately not part of `scrape` —
+it would roughly double a full-universe run for data most screens never read.
+Run `mcfinex enrich TICKER`, or use the button in the dashboard's company
+detail. Because cash changes enterprise value, enriching re-values the company
+and re-scores every verdict derived from it.
+
+MoneyControl was considered as the fallback and rejected: its financial tables
+are client-rendered, with no API in the page, so it would need a headless
+browser — exactly what this rewrite removed. The only figure it still has that
+screener lacks is promoter pledge, for which promoter holding stands in.
+
 ## Known gaps
 
 - **Column N is repurposed.** Screener's balance sheet does not split current
@@ -175,10 +199,9 @@ Ported behaviour, except where the Java was demonstrably wrong:
   N therefore carries **Borrowings**, which makes `P = (M+N)/O` a correct
   debt-to-equity ratio, matching that column group's own title. The `CURRENT
   LIABILITY` header is left stale rather than editing the template.
-- **Current assets (R) and current liabilities (S) are never written**, for the
-  same reason — there is no source for them. Columns `T = R/S` (current ratio)
-  and `X = W-S` (capital employed) therefore do not compute, so `Y` (ROCE) is
-  unreliable. Use screener's own ROCE, stored on the company row, instead.
+- **Current assets and liabilities** are only available after `mcfinex enrich`
+  has fetched that company's schedules. Until then the current ratio reports
+  UNKNOWN rather than a guess.
 - **The workbook holds ~1,970 rows.** Its formulas stop there, so a full-universe
   export skips the overflow and says so rather than writing inputs into rows that
   compute nothing. Everything is in the database and the dashboard regardless.
@@ -209,7 +232,7 @@ src/mcfinex/
   sources/screener.py  company page parser
   sources/nse.py       bhavcopy loader
   export/workbook.py   SSP workbook writer
-tests/               181 tests; screener parsing runs off a saved fixture,
+tests/               198 tests; screener parsing runs off a saved fixture,
                      the dashboard off Streamlit's AppTest harness
 ```
 

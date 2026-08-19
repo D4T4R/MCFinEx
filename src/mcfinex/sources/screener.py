@@ -158,6 +158,10 @@ class Section:
 class Company:
     ticker: str
     name: str | None = None
+    #: Screener's internal id, which is the BSE scrip code. Needed by the
+    #: schedules API; captured during the normal scrape so enrichment later
+    #: costs no extra page fetch.
+    company_id: int | None = None
     consolidated: bool = False
     industry: list[str] = field(default_factory=list)
     ratios: dict[str, float | None] = field(default_factory=dict)
@@ -226,6 +230,7 @@ def parse(html: str, ticker: str, *, consolidated: bool = False) -> Company:
     if heading is None:
         raise ScreenerError(f"{ticker}: page has no <h1>, probably not a company page")
     company.name = _text(heading)
+    company.company_id = _parse_company_id(soup)
 
     company.ratios = _parse_top_ratios(soup)
     company.industry = _parse_industry(soup)
@@ -234,6 +239,50 @@ def parse(html: str, ticker: str, *, consolidated: bool = False) -> Company:
         if parsed:
             company.sections[name] = parsed
     return company
+
+
+def _parse_company_id(soup) -> int | None:
+    node = soup.find(attrs={"data-company-id": True})
+    if node is None:
+        return None
+    try:
+        return int(node["data-company-id"])
+    except (TypeError, ValueError):
+        return None
+
+
+def fetch_schedule(company_id: int, parent: str, section: str = "balance-sheet", *,
+                   session: requests.Session | None = None, timeout: float = 20.0,
+                   throttle: Throttle | None = None) -> dict[str, dict[str, str]]:
+    """Fetch the breakdown behind an expandable row.
+
+    Screener's balance sheet collapses detail into ``Other Assets``,
+    ``Other Liabilities`` and ``Borrowings``; the page expands them through
+    ``/api/company/{id}/schedules/``, which returns plain JSON. This is what
+    supplies cash, the current asset and liability components, and the
+    long/short borrowings split -- none of which appear on the page itself.
+
+    Returns ``{line item: {period: value}}``, empty when there is no schedule.
+    """
+    sess = session or requests.Session()
+    if throttle is not None:
+        throttle.wait()
+    resp = sess.get(
+        f"{BASE_URL}/api/company/{company_id}/schedules/",
+        params={"parent": parent, "section": section},
+        headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
+        timeout=timeout,
+    )
+    if resp.status_code == 429:
+        raise RateLimited(f"schedule {parent}: rate limited")
+    if resp.status_code == 404:
+        return {}
+    resp.raise_for_status()
+    try:
+        payload = resp.json()
+    except ValueError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def _parse_top_ratios(soup) -> dict[str, float | None]:

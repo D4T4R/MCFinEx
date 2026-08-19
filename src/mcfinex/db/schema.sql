@@ -9,6 +9,9 @@ CREATE TABLE IF NOT EXISTS companies (
     ticker                TEXT PRIMARY KEY,
     name                  TEXT,
     isin                  TEXT,
+    -- Screener's internal id, which is the BSE scrip code. Needed by the
+    -- schedules API that supplies cash and the current asset/liability split.
+    company_id            INTEGER,
     sector                TEXT,
     broad_industry        TEXT,
     industry              TEXT,

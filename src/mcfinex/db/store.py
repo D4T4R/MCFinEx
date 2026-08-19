@@ -18,7 +18,7 @@ SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 # Guarded so a typo in a caller cannot silently write to a column that does not
 # exist, and so scraped keys can never widen the statement.
 COMPANY_COLUMNS = (
-    "name", "isin", "sector", "broad_industry", "industry", "face_value",
+    "name", "isin", "company_id", "sector", "broad_industry", "industry", "face_value",
     "market_cap", "current_price", "book_value", "stock_pe", "industry_pe",
     "dividend_yield", "roce", "roe", "outstanding_shares", "consolidated",
     "scan_for_results", "last_updated", "last_updated_quarter", "latest_period",
@@ -59,7 +59,7 @@ class Store:
         re-scrape of everything.
         """
         existing = {r["name"] for r in self.conn.execute("PRAGMA table_info(companies)")}
-        for column, ddl in (("price_date", "TEXT"),):
+        for column, ddl in (("price_date", "TEXT"), ("company_id", "INTEGER")):
             if column not in existing:
                 self.conn.execute(f"ALTER TABLE companies ADD COLUMN {column} {ddl}")
 
@@ -114,6 +114,34 @@ class Store:
                 payload,
             )
         return len(payload)
+
+    def replace_schedule(self, ticker: str, rows: Iterable[tuple[str, str, str, float | None]]) -> int:
+        """Replace a company's schedule detail, leaving its statements alone.
+
+        Schedules are fetched separately from the page scrape, so they are
+        replaced independently. A full re-scrape still clears them, because
+        `replace_financials` wipes every row for the ticker -- cash from a
+        previous quarter must not sit beside fresh statements.
+        """
+        payload = [(ticker, p, s, l, _scalar(v)) for p, s, l, v in rows]
+        with self.conn:
+            self.conn.execute(
+                "DELETE FROM financials WHERE ticker = ? AND statement = ?",
+                (ticker, "schedule"),
+            )
+            self.conn.executemany(
+                "INSERT INTO financials (ticker, period, statement, label, value) "
+                "VALUES (?, ?, ?, ?, ?)",
+                payload,
+            )
+        return len(payload)
+
+    def has_schedule(self, ticker: str) -> bool:
+        row = self.conn.execute(
+            "SELECT 1 FROM financials WHERE ticker = ? AND statement = 'schedule' LIMIT 1",
+            (ticker,),
+        ).fetchone()
+        return row is not None
 
     def replace_valuations(self, ticker: str, model: str, fields: Mapping[str, Any]) -> int:
         """Replace one valuation model's output for a company."""

@@ -10,13 +10,16 @@ Run with ``mcfinex-dashboard`` or ``streamlit run src/mcfinex/ui/dashboard.py``.
 from __future__ import annotations
 
 import pandas as pd
+import requests
 import streamlit as st
 
 # Absolute imports: `streamlit run` executes this file as __main__ rather than
 # as a package module, so relative imports would fail at startup.
 from mcfinex.config import Settings
 from mcfinex.db.store import Store
+from mcfinex.enrich import enrich
 from mcfinex.report import screen_all
+from mcfinex.sources.screener import ScreenerError
 from mcfinex.screening import Verdict
 
 VERDICT_COLOUR = {
@@ -160,6 +163,8 @@ def _drilldown(filtered: pd.DataFrame, detail: dict) -> None:
     c.caption(f"sector median {m.sector_pe:,.1f}" if m.sector_pe else "no sector median")
     d.metric("BUY signals", f"{s.buy_count} / {s.scored_count}")
 
+    _enrich_control(ticker, row)
+
     left, right = st.columns(2)
     with left:
         st.markdown("**Fundamentals**")
@@ -178,6 +183,49 @@ def _drilldown(filtered: pd.DataFrame, detail: dict) -> None:
             ]),
             width='stretch', hide_index=True,
         )
+
+
+def _enrich_control(ticker: str, row) -> None:
+    """Fetch the collapsed balance-sheet detail for this one company.
+
+    Three extra requests, so it is never part of a bulk run. Supplies cash,
+    which changes enterprise value, and the current asset/liability split, which
+    is the only way the current ratio can be computed -- so the company is
+    re-valued and re-scored straight afterwards.
+    """
+    already = row.metrics.current_assets is not None
+    label = "Re-fetch balance-sheet detail" if already else "Fetch balance-sheet detail"
+    caption = (
+        "Cash, current assets and liabilities are loaded; the valuation uses them."
+        if already else
+        "Adds cash, the current ratio and the long-term borrowings split, then re-values."
+    )
+
+    left, right = st.columns([1, 3])
+    with left:
+        clicked = st.button(label, key=f"enrich-{ticker}", width="stretch")
+    with right:
+        st.caption(caption)
+
+    if not clicked:
+        return
+    with st.spinner(f"Fetching schedules for {ticker}..."):
+        try:
+            with Store(str(Settings.from_env().db_path)) as store:
+                result = enrich(store, ticker)
+        except (ScreenerError, requests.RequestException) as exc:
+            st.error(f"Could not fetch detail for {ticker}: {exc}")
+            return
+    if not result.found_anything:
+        st.warning(f"Screener has no balance-sheet schedules for {ticker}.")
+        return
+    st.success(
+        f"{ticker}: cash {result.cash:,.0f}, current assets {result.current_assets:,.0f}, "
+        f"current liabilities {result.current_liabilities:,.0f}"
+        + (" — re-valued." if result.revalued else "")
+    )
+    st.cache_data.clear()
+    st.rerun()
 
 
 def _signal_frame(signals) -> pd.DataFrame:

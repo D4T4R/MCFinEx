@@ -108,6 +108,7 @@ def company_fields(company: Company, derived: Derived, *, today: date | None = N
     industry = company.industry + [None, None, None]
     return {
         "name": company.name,
+        "company_id": company.company_id,
         "sector": industry[0],
         "broad_industry": industry[1],
         "industry": industry[2],
@@ -196,10 +197,13 @@ def revalue(store: Store, ticker: str) -> bool:
     if market_cap is None and shares and price:
         market_cap = price * shares
     if market_cap:
-        # Matches derive(): no cash netted off, because screener has no cash line.
+        # EV = market cap + debt - cash. The company page has no cash line, so
+        # normally nothing is netted off; once `mcfinex enrich` has pulled the
+        # balance-sheet schedules, the real cash figure is available and used.
         # Recomputed even when EBITDA is unusable -- otherwise a company with no
         # operating profit keeps whatever enterprise value it was last given.
-        enterprise_value = market_cap + (borrowings[0] if borrowings else 0.0)
+        cash = derived.get("cash") or 0.0
+        enterprise_value = market_cap + (borrowings[0] if borrowings else 0.0) - cash
     if enterprise_value and ebitda and ebitda[-1]:
         multiple = enterprise_value / ebitda[-1]
 

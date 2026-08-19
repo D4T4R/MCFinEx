@@ -87,6 +87,8 @@ def metrics_for(store: Store, ticker: str, sector_medians: dict[str, float]) -> 
         dividend_yield=company["dividend_yield"],
         promoter_holding=latest("shareholding", *labels.PROMOTERS),
         is_financial=is_financial,
+        current_assets=derived.get("current_assets"),
+        current_liabilities=derived.get("current_liabilities"),
         ev_ebitda_upside=ev.get("difference_pct"),
         ev_ebitda_upside_with_debt=ev.get("difference_with_borrowing_pct"),
         pe_yearly_rerating=eps_yearly.get("difference_in_pe_pct"),

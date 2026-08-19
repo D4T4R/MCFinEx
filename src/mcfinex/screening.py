@@ -64,6 +64,9 @@ class Metrics:
     dividend_yield: float | None = None
     promoter_holding: float | None = None
     promoter_pledge: float | None = None
+    # Only present once the balance-sheet schedules have been fetched.
+    current_assets: float | None = None
+    current_liabilities: float | None = None
     #: Banks, NBFCs and insurers. EV/EBITDA is not a meaningful way to value
     #: them -- borrowings are raw material, not capital structure -- so the
     #: EV-based signals are withheld rather than reported as a number.
@@ -183,11 +186,16 @@ def _debt_to_equity(m: Metrics) -> Signal:
 
 
 def _current_ratio(m: Metrics) -> Signal:
-    # Screener's default balance sheet gives no current/non-current split, so
-    # this cannot be computed at all. Reported as UNKNOWN rather than guessed:
-    # a fabricated current ratio is worse than an absent one.
-    return Signal("current_ratio", "Current ratio", Verdict.UNKNOWN, None,
-                  "no current asset/liability split on screener", available=False)
+    # The company page gives no current/non-current split, but the balance-sheet
+    # schedules do. Until `mcfinex enrich` has fetched them this stays UNKNOWN
+    # rather than guessed -- a fabricated current ratio is worse than none.
+    if m.current_assets is None or not m.current_liabilities:
+        return Signal("current_ratio", "Current ratio", Verdict.UNKNOWN, None,
+                      "run enrich to fetch the balance-sheet detail", available=False)
+    ratio = m.current_assets / m.current_liabilities
+    return Signal("current_ratio", "Current ratio",
+                  _band(ratio, buy=1.5, sell=1.0), ratio,
+                  ">1.5 BUY, <1 SELL")
 
 
 def _roce(m: Metrics) -> Signal:
