@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 from datetime import date
 
@@ -13,6 +14,7 @@ from .config import settings
 from .db.store import Store
 from .enrich import enrich
 from .export import workbook
+from .migrate import compare, migrate
 from .pipeline import persist, revalue
 from .report import screen_all
 from .quarters import current_quarter
@@ -64,6 +66,13 @@ def _build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("enrich", help="fetch balance-sheet detail for named companies")
     p.add_argument("tickers", nargs="+", help="companies to enrich")
     p.set_defaults(handler=cmd_enrich)
+
+    p = sub.add_parser("push", help="copy the local database to a hosted one")
+    p.add_argument("--to", required=True,
+                   help="target DSN, e.g. postgresql://... (or $MCFINEX_PG)")
+    p.add_argument("--all", action="store_true",
+                   help="include companies seeded but never scraped")
+    p.set_defaults(handler=cmd_push)
 
     p = sub.add_parser("prune", help="remove ETFs and fund units that are not companies")
     p.add_argument("--apply", action="store_true", help="actually delete; default lists only")
@@ -205,6 +214,38 @@ def cmd_enrich(args) -> int:
                      ticker, result.cash, result.current_assets,
                      result.current_liabilities, "  (revalued)" if result.revalued else "")
     log.info("enriched %d companies", done)
+    return 0
+
+
+def cmd_push(args) -> int:
+    """Replace a hosted database with the local one.
+
+    The deployed app reads whatever this leaves behind, so the copy is a
+    replacement rather than a merge: a half-updated screen with no clear as-of
+    date is worse than a stale one.
+    """
+    target_dsn = args.to
+    if target_dsn.startswith("$"):
+        target_dsn = os.environ.get(target_dsn[1:], "")
+    if not target_dsn:
+        log.error("no target DSN")
+        return 2
+
+    seen: dict[str, int] = {}
+
+    def progress(table: str, copied: int) -> None:
+        if copied and copied != seen.get(table):
+            seen[table] = copied
+            log.info("  %s: %s rows", table, f"{copied:,}")
+
+    with Store(args.db) as source, Store(target_dsn) as target:
+        log.info("copying %s -> %s", args.db, target.dialect.name)
+        result = migrate(source, target, only_screened=not args.all, progress=progress)
+        log.info("copied %s rows", f"{result.total:,}")
+        for table, (local, remote) in compare(source, target).items():
+            match = "ok" if args.all and local == remote or not args.all else ""
+            log.info("  %-16s local %9s  remote %9s %s",
+                     table, f"{local:,}", f"{remote:,}", match)
     return 0
 
 

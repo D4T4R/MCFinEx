@@ -1,0 +1,6 @@
+# Committed: contains no secrets.
+[server]
+headless = true
+
+[browser]
+gatherUsageStats = false

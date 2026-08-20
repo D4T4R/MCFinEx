@@ -29,7 +29,8 @@ def _float(env: str, default: float) -> float:
 @dataclass(frozen=True)
 class Settings:
     data_dir: Path
-    db_path: Path
+    #: A local path, or a Postgres DSN when MCFINEX_PG is set.
+    db_path: Path | str
     template_path: Path
     export_path: Path
     request_delay: float   # seconds between screener requests
@@ -38,9 +39,14 @@ class Settings:
     @classmethod
     def from_env(cls) -> "Settings":
         data_dir = _path("MCFINEX_DATA_DIR", PROJECT_ROOT / "data")
+        # A Postgres DSN is a connection string, not a path, so it must not be
+        # expanded or resolved. MCFINEX_PG wins when both are set: it is what a
+        # deployment sets, and a stale local file silently taking precedence
+        # would be very hard to notice.
+        dsn = os.environ.get("MCFINEX_PG", "").strip()
         return cls(
             data_dir=data_dir,
-            db_path=_path("MCFINEX_DB", data_dir / "stocks.db"),
+            db_path=dsn or _path("MCFINEX_DB", data_dir / "stocks.db"),
             # The SSP working workbook carries the valuation formulas; the
             # scraper only fills its input cells.
             template_path=_path("MCFINEX_TEMPLATE", Path.home() / "Downloads" / "SSP_Working_merged.xlsx"),
@@ -53,3 +59,13 @@ class Settings:
 
 
 settings = Settings.from_env()
+
+
+def is_dsn(target: Path | str) -> bool:
+    """Whether a setting points at a hosted database rather than a file."""
+    return str(target).startswith(("postgres://", "postgresql://"))
+
+
+def database_ready(settings: "Settings") -> bool:
+    """A DSN is assumed reachable; a file has to exist."""
+    return is_dsn(settings.db_path) or Path(settings.db_path).exists()

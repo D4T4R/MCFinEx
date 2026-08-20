@@ -13,6 +13,8 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Mapping, Sequence
 
+from .dialect import for_dsn, split_statements
+
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
 # Guarded so a typo in a caller cannot silently write to a column that does not
@@ -26,16 +28,82 @@ COMPANY_COLUMNS = (
 )
 
 
+class _Connection:
+    """A connection that speaks whichever dialect it was opened for.
+
+    Statements are written once in SQLite style and translated on the way out,
+    so no call site has to know which database it is talking to.
+    """
+
+    def __init__(self, raw, dialect):
+        self._raw = raw
+        self.dialect = dialect
+
+    def execute(self, sql: str, params: Sequence[Any] = ()):
+        return self._raw.execute(self.dialect.statement(sql), tuple(params))
+
+    def executemany(self, sql: str, rows: Iterable[Sequence[Any]]):
+        payload = [tuple(r) for r in rows]
+        if not payload:
+            # psycopg raises on an empty sequence where sqlite3 shrugs.
+            return _Empty()
+        cursor = self._raw.cursor()
+        cursor.executemany(self.dialect.statement(sql), payload)
+        return cursor
+
+    def commit(self) -> None:
+        self._raw.commit()
+
+    def close(self) -> None:
+        self._raw.close()
+
+    def __enter__(self):
+        self._raw.__enter__()
+        return self
+
+    def __exit__(self, *exc):
+        return self._raw.__exit__(*exc)
+
+    @property
+    def raw(self):
+        return self._raw
+
+
+class _Empty:
+    """Stands in for a cursor when there was nothing to execute."""
+
+    rowcount = 0
+
+    def __iter__(self):
+        return iter(())
+
+    def fetchone(self):
+        return None
+
+    def fetchall(self):
+        return []
+
+
 class Store:
-    """A connection to the MCFinEx SQLite database."""
+    """A connection to the MCFinEx database, SQLite or Postgres."""
 
     def __init__(self, path: str | Path):
-        self.path = Path(path)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(self.path)
-        self.conn.row_factory = sqlite3.Row
-        self.conn.execute("PRAGMA foreign_keys = ON")
-        self.conn.execute("PRAGMA journal_mode = WAL")
+        dsn = str(path)
+        self.dialect = for_dsn(dsn)
+        if self.dialect.is_postgres:
+            import psycopg
+            from psycopg.rows import dict_row
+
+            self.path = None
+            raw = psycopg.connect(dsn, row_factory=dict_row, connect_timeout=20)
+        else:
+            self.path = Path(path)
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            raw = sqlite3.connect(self.path)
+            raw.row_factory = sqlite3.Row
+            raw.execute("PRAGMA foreign_keys = ON")
+            raw.execute("PRAGMA journal_mode = WAL")
+        self.conn = _Connection(raw, self.dialect)
 
     def __enter__(self) -> "Store":
         return self
@@ -47,7 +115,9 @@ class Store:
         self.conn.close()
 
     def create_schema(self) -> None:
-        self.conn.executescript(SCHEMA_PATH.read_text())
+        ddl = self.dialect.schema(SCHEMA_PATH.read_text())
+        for statement in split_statements(ddl):
+            self.conn.execute(statement)
         self._add_missing_columns()
         self.conn.commit()
 
@@ -58,10 +128,21 @@ class Store:
         columns added later have to be applied separately rather than forcing a
         re-scrape of everything.
         """
-        existing = {r["name"] for r in self.conn.execute("PRAGMA table_info(companies)")}
+        existing = self._company_columns()
         for column, ddl in (("price_date", "TEXT"), ("company_id", "INTEGER")):
             if column not in existing:
                 self.conn.execute(f"ALTER TABLE companies ADD COLUMN {column} {ddl}")
+
+    def _company_columns(self) -> set[str]:
+        """Column names already on `companies`, however the database reports them."""
+        if self.dialect.is_postgres:
+            rows = self.conn.execute(
+                "SELECT column_name AS name FROM information_schema.columns "
+                "WHERE table_name = ?", ("companies",)
+            )
+        else:
+            rows = self.conn.execute("PRAGMA table_info(companies)")
+        return {r["name"] for r in rows}
 
     # ---------------------------------------------------------------- writes
 
@@ -196,7 +277,7 @@ class Store:
         sql += " ORDER BY ticker"
         return [r["ticker"] for r in self.conn.execute(sql)]
 
-    def company(self, ticker: str) -> sqlite3.Row | None:
+    def company(self, ticker: str):
         cur = self.conn.execute("SELECT * FROM companies WHERE ticker = ?", (ticker,))
         return cur.fetchone()
 
@@ -245,7 +326,7 @@ class Store:
             )
         }
 
-    def all_companies(self) -> dict[str, sqlite3.Row]:
+    def all_companies(self) -> dict[str, Any]:
         """Every scraped company in one query, keyed by ticker."""
         return {
             r["ticker"]: r for r in self.conn.execute(
@@ -318,9 +399,9 @@ class Store:
     def data_freshness(self) -> tuple[str | None, str | None]:
         """Newest price date and scrape date across the universe."""
         row = self.conn.execute(
-            "SELECT MAX(price_date), MAX(last_updated) FROM companies"
+            "SELECT MAX(price_date) AS priced, MAX(last_updated) AS scraped FROM companies"
         ).fetchone()
-        return (row[0], row[1]) if row else (None, None)
+        return (row["priced"], row["scraped"]) if row else (None, None)
 
     def valuation_rows(self, ticker: str) -> list[tuple[str, str, float | None]]:
         """Every stored valuation field for one company."""
@@ -333,8 +414,20 @@ class Store:
         ]
 
     def compact(self) -> None:
-        """Reclaim space after a bulk delete."""
-        self.conn.execute("VACUUM")
+        """Reclaim space after a bulk delete.
+
+        Postgres cannot VACUUM inside a transaction, so it needs autocommit.
+        """
+        if self.dialect.is_postgres:
+            raw = self.conn.raw
+            previous = raw.autocommit
+            raw.autocommit = True
+            try:
+                raw.execute("VACUUM")
+            finally:
+                raw.autocommit = previous
+        else:
+            self.conn.execute("VACUUM")
 
     def scraped_tickers(self) -> list[str]:
         """Companies that have actually been scraped, not just seeded from NSE."""
@@ -345,7 +438,7 @@ class Store:
             )
         ]
 
-    def export_rows(self) -> Iterator[sqlite3.Row]:
+    def export_rows(self) -> Iterator[Any]:
         """Every company joined to its valuation fields, for the Excel export."""
         return self.conn.execute(
             """

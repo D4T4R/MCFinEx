@@ -1,0 +1,10 @@
+# Streamlit Community Cloud installs from this file. It mirrors the runtime
+# extras in pyproject.toml; the dev extras are deliberately absent.
+requests>=2.31
+beautifulsoup4>=4.12
+lxml>=5.0
+openpyxl>=3.1
+streamlit>=1.40
+pandas>=2.0
+altair>=5.0
+psycopg[binary]>=3.1

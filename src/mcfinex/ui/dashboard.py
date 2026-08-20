@@ -15,7 +15,7 @@ import streamlit as st
 
 # Absolute imports: `streamlit run` executes this file as __main__ rather than
 # as a package module, so relative imports would fail at startup.
-from mcfinex.config import Settings
+from mcfinex.config import Settings, database_ready as _database_ready
 from mcfinex.db.store import Store
 from mcfinex.enrich import enrich
 from mcfinex.report import screen_all
@@ -88,7 +88,7 @@ def main() -> None:
     # freezes the environment at import time.
     settings = Settings.from_env()
     db_path = str(settings.db_path)
-    if not settings.db_path.exists():
+    if not _database_ready(settings):
         st.error(f"No database at {db_path}. Run `mcfinex init` then `mcfinex scrape`.")
         return
 

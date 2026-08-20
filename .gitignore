@@ -17,3 +17,6 @@ data/
 .env
 .idea/
 .vscode/
+
+# Holds a live database credential.
+.streamlit/secrets.toml

@@ -17,7 +17,7 @@ import streamlit as st
 
 # Absolute imports: streamlit runs this as __main__, not as a package module.
 from mcfinex import picks as picks_module
-from mcfinex.config import Settings
+from mcfinex.config import Settings, database_ready as _database_ready
 from mcfinex.db.store import Store
 from mcfinex.picks import Tier
 from mcfinex.report import screen_all
@@ -46,15 +46,27 @@ def load(db_path: str, stamp: float):
     )
 
 
+def _cache_key(settings) -> float:
+    """Something that changes when the data does.
+
+    A local file has a modification time; a hosted database has not, so the
+    cache is cleared by the sidebar refresh instead.
+    """
+    from mcfinex.config import is_dsn
+    from pathlib import Path
+
+    if is_dsn(settings.db_path):
+        return 0.0
+    return Path(settings.db_path).stat().st_mtime
+
+
 def main() -> None:
     settings = Settings.from_env()
-    if not settings.db_path.exists():
+    if not _database_ready(settings):
         st.error(f"No database at {settings.db_path}. Run `mcfinex init` then `mcfinex scrape`.")
         return
 
-    all_picks, heat, universe = load(
-        str(settings.db_path), settings.db_path.stat().st_mtime
-    )
+    all_picks, heat, universe = load(str(settings.db_path), _cache_key(settings))
     st.title("Ideas")
     st.caption(
         "Ranked by corroboration, not by size of upside. Screened from stored data — "
