@@ -69,10 +69,11 @@ NUMERIC_FORMATS = {
 
 
 @st.cache_data(show_spinner="Screening companies...")
-def load(db_path: str) -> tuple[pd.DataFrame, dict]:
+def load(db_path: str, revision: str) -> tuple[pd.DataFrame, dict]:
     """Screen everything once and cache it.
 
-    Keyed on the database path; use the sidebar refresh after a scrape.
+    Keyed on a revision token read from the database, so new data invalidates
+    the cache on its own rather than waiting for someone to press refresh.
     """
     with Store(db_path) as store:
         rows = screen_all(store)
@@ -92,7 +93,9 @@ def main() -> None:
         st.error(f"No database at {db_path}. Run `mcfinex init` then `mcfinex scrape`.")
         return
 
-    frame, detail = load(db_path)
+    with Store(db_path) as probe:
+        revision = probe.revision()
+    frame, detail = load(db_path, revision)
     if frame.empty:
         st.warning("Nothing scraped yet. Run `mcfinex scrape --from-template`.")
         return

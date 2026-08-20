@@ -1,0 +1,57 @@
+name: Nightly prices
+
+# Closing prices and any newly listed symbols. Deliberately not a re-scrape:
+# fundamentals change quarterly, prices daily, and a full scrape is ~40 minutes
+# of requests to a free service.
+#
+# NSE publishes the bhavcopy after the close -- 15:30 IST is 10:00 UTC, and the
+# file lands a while later -- so this runs at 13:00 UTC (18:30 IST) on weekdays.
+# GitHub's scheduler is best-effort and can lag under load, which does not
+# matter here: the loader walks back to the most recent published session, so a
+# late or missed run corrects itself the next night, and exchange holidays need
+# no special handling.
+on:
+  schedule:
+    - cron: "0 13 * * 1-5"
+  workflow_dispatch: {}
+
+# Never let two refreshes overlap: they write the same rows.
+concurrency:
+  group: nightly-prices
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      MCFINEX_PG: ${{ secrets.MCFINEX_PG }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: pip install -e .
+
+      - name: Check the secret is present
+        run: |
+          if [ -z "$MCFINEX_PG" ]; then
+            echo "MCFINEX_PG is not set. Add it under" \
+                 "Settings > Secrets and variables > Actions." >&2
+            exit 1
+          fi
+
+      # Unions several sessions, because a bhavcopy lists only what traded that
+      # day: illiquid small caps drop out and would look like delistings.
+      - name: Pick up newly listed symbols
+        run: mcfinex universe
+
+      - name: Refresh closing prices
+        run: mcfinex prices
+
+      - name: Show what the app will serve
+        run: mcfinex screen -n 10 --min-buys 8

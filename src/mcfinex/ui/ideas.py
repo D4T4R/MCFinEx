@@ -33,8 +33,8 @@ TIER_HELP = {
 
 
 @st.cache_data(show_spinner="Screening...")
-def load(db_path: str, stamp: float):
-    """Screen once per database change; `stamp` busts the cache after a scrape."""
+def load(db_path: str, revision: str):
+    """Screen once per database revision; the token busts the cache on new data."""
     with Store(db_path) as store:
         rows = screen_all(store)
     # rank(), not to_pick(): store order is alphabetical, and the whole point
@@ -46,18 +46,14 @@ def load(db_path: str, stamp: float):
     )
 
 
-def _cache_key(settings) -> float:
-    """Something that changes when the data does.
+def _cache_key(settings) -> str:
+    """A token that changes when the underlying data does.
 
-    A local file has a modification time; a hosted database has not, so the
-    cache is cleared by the sidebar refresh instead.
+    Asked of the database rather than the filesystem, so a push to the hosted
+    database invalidates the cache without anyone remembering to press refresh.
     """
-    from mcfinex.config import is_dsn
-    from pathlib import Path
-
-    if is_dsn(settings.db_path):
-        return 0.0
-    return Path(settings.db_path).stat().st_mtime
+    with Store(str(settings.db_path)) as store:
+        return store.revision()
 
 
 def main() -> None:

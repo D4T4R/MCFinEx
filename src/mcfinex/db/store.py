@@ -38,6 +38,7 @@ class _Connection:
     def __init__(self, raw, dialect):
         self._raw = raw
         self.dialect = dialect
+        self._transaction = None
 
     def execute(self, sql: str, params: Sequence[Any] = ()):
         return self._raw.execute(self.dialect.statement(sql), tuple(params))
@@ -58,10 +59,21 @@ class _Connection:
         self._raw.close()
 
     def __enter__(self):
-        self._raw.__enter__()
+        # `with connection:` means different things in the two drivers. sqlite3
+        # commits and leaves the connection open; psycopg closes it outright,
+        # so the first transaction block would take the connection with it.
+        # psycopg's transaction() is the equivalent scope.
+        if self.dialect.is_postgres:
+            self._transaction = self._raw.transaction()
+            self._transaction.__enter__()
+        else:
+            self._raw.__enter__()
         return self
 
     def __exit__(self, *exc):
+        if self.dialect.is_postgres:
+            transaction, self._transaction = self._transaction, None
+            return transaction.__exit__(*exc)
         return self._raw.__exit__(*exc)
 
     @property
@@ -223,6 +235,29 @@ class Store:
             (ticker,),
         ).fetchone()
         return row is not None
+
+    def replace_valuations_bulk(self, models: Sequence[str],
+                                rows: Iterable[tuple[str, str, str, Any]]) -> int:
+        """Replace whole valuation models across every company at once.
+
+        The per-company version costs fourteen statements each; over a network
+        that is 35,616 round-trips for the universe, and a blip halfway leaves
+        the database part-revalued.
+        """
+        stamp = date.today().isoformat()
+        payload = [(t, m, f, _scalar(v), stamp) for t, m, f, v in rows
+                   if not isinstance(v, (list, tuple))]
+        placeholders = ", ".join("?" for _ in models)
+        with self.conn:
+            self.conn.execute(
+                f"DELETE FROM valuations WHERE model IN ({placeholders})", tuple(models)
+            )
+            self.conn.executemany(
+                "INSERT INTO valuations (ticker, model, field, value, computed_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                payload,
+            )
+        return len(payload)
 
     def replace_valuations(self, ticker: str, model: str, fields: Mapping[str, Any]) -> int:
         """Replace one valuation model's output for a company."""
@@ -395,6 +430,26 @@ class Store:
             (ticker,),
         )
         return {r["label"].strip().casefold(): r["value"] for r in rows if r["value"] is not None}
+
+    def revision(self) -> str:
+        """A token that changes whenever the data does.
+
+        A local file has a modification time; a hosted database has not, so the
+        cache needs something from the rows themselves. Cheap enough to run on
+        every page load, and it changes after a scrape, a price refresh or an
+        enrichment.
+        """
+        row = self.conn.execute(
+            "SELECT MAX(last_updated) AS scraped, MAX(price_date) AS priced, "
+            "COUNT(*) AS companies FROM companies"
+        ).fetchone()
+        valued = self.conn.execute(
+            "SELECT MAX(computed_at) AS computed, COUNT(*) AS n FROM valuations"
+        ).fetchone()
+        return "|".join(str(x) for x in (
+            row["scraped"], row["priced"], row["companies"],
+            valued["computed"], valued["n"],
+        ))
 
     def data_freshness(self) -> tuple[str | None, str | None]:
         """Newest price date and scrape date across the universe."""

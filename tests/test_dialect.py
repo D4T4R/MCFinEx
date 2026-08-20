@@ -129,3 +129,37 @@ class TestDsnDetection:
     @pytest.mark.parametrize("dsn", ["data/stocks.db", "/tmp/x.sqlite", ":memory:"])
     def test_anything_else_is_sqlite(self, dsn):
         assert not for_dsn(dsn).is_postgres
+
+
+class TestRedaction:
+    """A DSN must never reach a log, a terminal or CI output intact."""
+
+    def test_password_is_masked(self):
+        from mcfinex.config import redact
+
+        out = redact("postgresql://postgres.abc:Sup3rSecret@host.supabase.com:5432/postgres")
+        assert "Sup3rSecret" not in out
+        assert "***" in out
+
+    def test_host_and_user_survive_so_it_stays_useful(self):
+        from mcfinex.config import redact
+
+        out = redact("postgresql://postgres.abc:pw@host.supabase.com:5432/postgres")
+        assert "postgres.abc" in out and "host.supabase.com" in out
+
+    def test_a_password_containing_an_at_sign_is_still_masked(self):
+        # Passwords are percent-encoded, but an unencoded @ must not fool it.
+        from mcfinex.config import redact
+
+        out = redact("postgresql://u:pa@ss@host:5432/db")
+        assert "pa@ss" not in out
+
+    def test_a_file_path_is_left_alone(self):
+        from mcfinex.config import redact
+
+        assert redact("data/stocks.db") == "data/stocks.db"
+
+    def test_a_dsn_without_credentials_is_handled(self):
+        from mcfinex.config import redact
+
+        assert redact("postgresql://host:5432/db").startswith("postgresql://")

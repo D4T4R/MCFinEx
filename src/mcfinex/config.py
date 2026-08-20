@@ -69,3 +69,21 @@ def is_dsn(target: Path | str) -> bool:
 def database_ready(settings: "Settings") -> bool:
     """A DSN is assumed reachable; a file has to exist."""
     return is_dsn(settings.db_path) or Path(settings.db_path).exists()
+
+
+def redact(target: Path | str) -> str:
+    """A connection string safe to print.
+
+    A DSN carries a live password. Logging it puts the credential into terminal
+    scrollback, CI output and any log aggregator downstream, which is how
+    secrets escape long after anyone remembers writing the line.
+    """
+    text = str(target)
+    if not is_dsn(text):
+        return text
+    scheme, _, rest = text.partition("://")
+    credentials, at, host = rest.rpartition("@")
+    if not at:
+        return f"{scheme}://{host}"
+    user = credentials.split(":", 1)[0]
+    return f"{scheme}://{user}:***@{host}"

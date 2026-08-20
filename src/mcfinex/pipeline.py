@@ -226,6 +226,83 @@ def revalue(store: Store, ticker: str) -> bool:
     return True
 
 
+#: The models revalue rewrites, so they can be cleared in one statement.
+REVALUED_MODELS = ("ev_ebitda", "eps_yearly", "eps_quarterly", "derived")
+
+
+def revalue_all(store: Store) -> int:
+    """Recompute every company's valuations in a handful of statements.
+
+    Prices move daily and every target derives from them, so this runs after a
+    price refresh. Doing it company by company costs fourteen statements each,
+    which is fine against a local file and eighteen minutes against a hosted
+    database.
+    """
+    companies = store.all_companies()
+    series = store.all_series({
+        "profit-loss": list(dict.fromkeys(labels.OPERATING_PROFIT + labels.EPS)),
+        "quarters": list(labels.EPS),
+        "balance-sheet": list(labels.BORROWINGS),
+    })
+    existing = store.all_valuations()
+
+    rows: list[tuple[str, str, str, object]] = []
+    revalued = 0
+    for ticker, company in companies.items():
+        price = company["current_price"]
+        if price is None:
+            continue
+        lines = series.get(ticker, {})
+
+        def run(statement: str, *names: str) -> list[float]:
+            for name in names:
+                values = lines.get((statement, name))
+                if values:
+                    return values
+            return []
+
+        # Stored newest-first; the models read oldest-first.
+        ebitda = run("profit-loss", *labels.OPERATING_PROFIT)[:HISTORY][::-1]
+        eps_yearly = run("profit-loss", *labels.EPS)[:HISTORY][::-1]
+        eps_quarterly = run("quarters", *labels.EPS)[:HISTORY][::-1]
+        borrowings = run("balance-sheet", *labels.BORROWINGS)
+
+        derived = dict(existing.get(ticker, {}).get("derived", {}))
+        shares = company["outstanding_shares"]
+        # Screener's own market cap is authoritative; the derived share count is
+        # only a fallback, and is out by 2x for a handful of companies.
+        market_cap = company["market_cap"] or (price * shares if shares else None)
+        enterprise_value = derived.get("enterprise_value")
+        multiple = derived.get("ev_ebitda_multiple")
+        if market_cap:
+            enterprise_value = market_cap + (borrowings[0] if borrowings else 0.0)
+            cash = derived.get("cash")
+            if cash:
+                enterprise_value -= cash
+            if ebitda and ebitda[-1]:
+                multiple = enterprise_value / ebitda[-1]
+
+        ev_model = value_by_ev_ebitda(
+            ebitda, ev_ebitda_multiple=multiple, outstanding_shares=shares,
+            long_term_borrowings=borrowings[0] if borrowings else None,
+            current_price=price,
+        ).as_dict()
+        derived.update(ev_ebitda_multiple=multiple, enterprise_value=enterprise_value)
+
+        for model, fields in (
+            ("ev_ebitda", ev_model),
+            ("eps_yearly", value_by_eps(eps_yearly, current_price=price).as_dict()),
+            ("eps_quarterly", value_by_eps(eps_quarterly, current_price=price).as_dict()),
+            ("derived", derived),
+        ):
+            for field, value in fields.items():
+                rows.append((ticker, model, field, value))
+        revalued += 1
+
+    store.replace_valuations_bulk(REVALUED_MODELS, rows)
+    return revalued
+
+
 def persist(store: Store, company: Company, *, today: date | None = None) -> Derived:
     """Derive, value and write a scraped company in one go."""
     derived = derive(company)

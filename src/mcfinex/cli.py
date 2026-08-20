@@ -10,12 +10,12 @@ from datetime import date
 
 import requests
 
-from .config import settings
+from .config import redact, settings
 from .db.store import Store
 from .enrich import enrich
 from .export import workbook
 from .migrate import compare, migrate
-from .pipeline import persist, revalue
+from .pipeline import persist, revalue, revalue_all
 from .report import screen_all
 from .quarters import current_quarter
 from .sources import nse, screener
@@ -107,7 +107,7 @@ def _build_parser() -> argparse.ArgumentParser:
 def cmd_init(args) -> int:
     with Store(args.db) as store:
         store.create_schema()
-    log.info("schema ready at %s", args.db)
+    log.info("schema ready at %s", redact(args.db))
     return 0
 
 
@@ -126,7 +126,7 @@ def cmd_universe(args) -> int:
                 listing.ticker,
                 {"isin": listing.isin, "current_price": listing.close},
             )
-    log.info("seeded %d companies into %s", len(listings), args.db)
+    log.info("seeded %d companies into %s", len(listings), redact(args.db))
     return 0
 
 
@@ -239,7 +239,7 @@ def cmd_push(args) -> int:
             log.info("  %s: %s rows", table, f"{copied:,}")
 
     with Store(args.db) as source, Store(target_dsn) as target:
-        log.info("copying %s -> %s", args.db, target.dialect.name)
+        log.info("copying %s -> %s", redact(args.db), target.dialect.name)
         result = migrate(source, target, only_screened=not args.all, progress=progress)
         log.info("copied %s rows", f"{result.total:,}")
         for table, (local, remote) in compare(source, target).items():
@@ -318,7 +318,7 @@ def cmd_prices(args) -> int:
         log.info("updated %d closing prices", updated)
 
         if not args.no_revalue:
-            revalued = sum(1 for t in store.scraped_tickers() if revalue(store, t))
+            revalued = revalue_all(store)
             log.info("recomputed valuations for %d companies", revalued)
     return 0
 
