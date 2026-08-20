@@ -130,3 +130,23 @@ class TestEmptyDatabase:
         at = AppTest.from_file(APP, default_timeout=60).run()
         assert not at.exception
         assert at.warning
+
+
+class TestQuarterlyTrends:
+    def test_chart_index_is_chronological_not_alphabetical(self):
+        """A string index sorts alphabetically and scrambles the quarters.
+
+        "Dec 24, Dec 25, Jun 25, Jun 26, Mar 25..." is what an index of
+        formatted labels produces; the axis must be temporal.
+        """
+        import pandas as pd
+        from datetime import date
+
+        periods = [date(2024, 12, 31), date(2025, 3, 31), date(2025, 6, 30), date(2025, 9, 30)]
+        frame = pd.DataFrame({"Sales": [1, 2, 3, 4]}, index=pd.to_datetime(periods))
+        assert list(frame.index) == sorted(frame.index)
+        assert frame.index.is_monotonic_increasing
+        # The formatted-label version is what regressed.
+        labelled = pd.DataFrame({"Sales": [1, 2, 3, 4]},
+                                index=[f"{p:%b %y}" for p in periods])
+        assert list(labelled.index) != sorted(labelled.index)

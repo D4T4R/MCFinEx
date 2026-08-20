@@ -231,11 +231,32 @@ def _quarterly_trends(ticker: str) -> None:
             elif trend.note:
                 st.caption(trend.note)
         with chart:
-            st.bar_chart(
-                pd.DataFrame({trend.label: trend.values},
-                             index=[f"{p:%b %y}" for p in trend.periods]),
-                height=150,
-            )
+            st.altair_chart(_quarter_chart(trend), use_container_width=True)
+
+
+def _quarter_chart(trend):
+    """Eight discrete quarters, in order, as readable bars.
+
+    Neither `st.bar_chart` default works here. A string index sorts
+    alphabetically -- Dec 24, Dec 25, Jun 25, Jun 26, Mar 25 -- scrambling the
+    trend; a datetime index is treated as continuous time, which draws hairline
+    bars against a monthly axis. So the axis is ordinal with an explicit order.
+    """
+    import altair as alt
+
+    labels = [f"{p:%b %y}" for p in trend.periods]
+    frame = pd.DataFrame({"quarter": labels, "value": trend.values})
+    return (
+        alt.Chart(frame)
+        .mark_bar(size=26, cornerRadiusTopLeft=3, cornerRadiusTopRight=3)
+        .encode(
+            x=alt.X("quarter:N", sort=labels, title=None,
+                    axis=alt.Axis(labelAngle=0)),
+            y=alt.Y("value:Q", title=None),
+            tooltip=["quarter", "value"],
+        )
+        .properties(height=160)
+    )
 
 
 def _trend_for(store: Store, ticker: str, label: str, aliases: tuple[str, ...]):
