@@ -133,25 +133,104 @@ class Row:
         return record
 
 
+#: Every line item a screen reads, grouped by statement, so the whole universe
+#: can be fetched in one query rather than one per company per label.
+SCREEN_LINES: dict[str, list[str]] = {
+    BALANCE_SHEET: list(dict.fromkeys(
+        labels.RESERVES + labels.EQUITY_CAPITAL + labels.OTHER_LIABILITIES
+        + labels.BORROWINGS + labels.DEPOSITS
+    )),
+    "shareholding": list(labels.PROMOTERS),
+    RATIOS: list(labels.INVENTORY_DAYS),
+    "quarters": list(labels.EPS),
+    "profit-loss": list(dict.fromkeys(labels.EPS + ("Financing Profit",))),
+}
+
+
 def screen_all(store: Store, tickers: list[str] | None = None) -> list[Row]:
-    """Screen every scraped company, or a chosen subset."""
+    """Screen every scraped company, or a chosen subset.
+
+    Loads the whole universe in three queries and assembles in memory. Doing it
+    per company issued 43,398 queries for a full screen -- unnoticeable against
+    a local file, but eleven minutes of round-trips against a hosted database.
+    """
     medians = sector_pe_medians(store)
+    companies = store.all_companies()
+    series = store.all_series(SCREEN_LINES)
+    valuations = store.all_valuations()
+
+    wanted = tickers if tickers is not None else list(companies)
     rows: list[Row] = []
-    for ticker in tickers if tickers is not None else store.scraped_tickers():
-        metrics = metrics_for(store, ticker, medians)
-        if metrics is None:
+    for ticker in wanted:
+        company = companies.get(ticker)
+        if company is None:
             continue
-        ev = store.valuation_fields(ticker, "ev_ebitda")
+        models = valuations.get(ticker, {})
+        metrics = _metrics_from(company, series.get(ticker, {}), models, medians)
+        ev = models.get("ev_ebitda", {})
         rows.append(Row(
             screening=screen(metrics),
             metrics=metrics,
             target_ev_ebitda=ev.get("target_price"),
-            target_pe_yearly=store.valuation_fields(ticker, "eps_yearly").get("target_price"),
-            target_pe_quarterly=store.valuation_fields(ticker, "eps_quarterly").get("target_price"),
+            target_pe_yearly=models.get("eps_yearly", {}).get("target_price"),
+            target_pe_quarterly=models.get("eps_quarterly", {}).get("target_price"),
             entry_3by4=ev.get("entry_price_1by4"),
             entry_2by3=ev.get("entry_price_1by3"),
         ))
     return rows
+
+
+def _metrics_from(company, series: dict, models: dict, medians: dict[str, float]) -> Metrics:
+    """Build Metrics from already-loaded rows, with no further queries."""
+
+    def first(statement: str, *names: str) -> float | None:
+        for name in names:
+            values = series.get((statement, name))
+            if values:
+                return values[0]
+        return None
+
+    def run(statement: str, *names: str) -> list[float]:
+        for name in names:
+            values = series.get((statement, name))
+            if values:
+                return values
+        return []
+
+    ev = models.get("ev_ebitda", {})
+    derived = models.get("derived", {})
+    sector = company["industry"] or company["sector"]
+    inventory = run(RATIOS, *labels.INVENTORY_DAYS)
+
+    return Metrics(
+        ticker=company["ticker"],
+        name=company["name"],
+        sector=sector,
+        price=company["current_price"],
+        reserves=first(BALANCE_SHEET, *labels.RESERVES),
+        equity_capital=first(BALANCE_SHEET, *labels.EQUITY_CAPITAL),
+        other_liabilities=_sum(first(BALANCE_SHEET, *labels.OTHER_LIABILITIES),
+                               first(BALANCE_SHEET, *labels.DEPOSITS)),
+        borrowings=first(BALANCE_SHEET, *labels.BORROWINGS),
+        roce=company["roce"],
+        inventory_days=inventory[0] if inventory else None,
+        inventory_days_prior=inventory[1] if len(inventory) > 1 else None,
+        free_cash_flow=derived.get("free_cash_flow"),
+        stock_pe=company["stock_pe"],
+        sector_pe=medians.get(sector) if sector else None,
+        book_value=company["book_value"],
+        dividend_yield=company["dividend_yield"],
+        promoter_holding=first("shareholding", *labels.PROMOTERS),
+        # Screener only writes "Financing Profit" for banks, NBFCs and insurers.
+        is_financial=bool(series.get(("profit-loss", "Financing Profit"))),
+        quarters_reported=len(run("quarters", *labels.EPS)),
+        current_assets=derived.get("current_assets"),
+        current_liabilities=derived.get("current_liabilities"),
+        ev_ebitda_upside=ev.get("difference_pct"),
+        ev_ebitda_upside_with_debt=ev.get("difference_with_borrowing_pct"),
+        pe_yearly_rerating=models.get("eps_yearly", {}).get("difference_in_pe_pct"),
+        pe_quarterly_rerating=models.get("eps_quarterly", {}).get("difference_in_pe_pct"),
+    )
 
 
 def _sum(*values: float | None) -> float | None:

@@ -244,6 +244,46 @@ class Store:
             )
         }
 
+    def all_companies(self) -> dict[str, sqlite3.Row]:
+        """Every scraped company in one query, keyed by ticker."""
+        return {
+            r["ticker"]: r for r in self.conn.execute(
+                "SELECT * FROM companies WHERE last_updated IS NOT NULL ORDER BY ticker"
+            )
+        }
+
+    def all_series(self, wanted: Mapping[str, Sequence[str]],
+                   ) -> dict[str, dict[tuple[str, str], list[float]]]:
+        """Every requested line item for every company, newest first.
+
+        One query instead of one per company per label. A full screen used to
+        issue 43,398 queries; in-process against SQLite that is fine, but over a
+        network it is eleven minutes of round-trips.
+        """
+        clauses, params = [], []
+        for statement, labels in wanted.items():
+            placeholders = ", ".join("?" for _ in labels)
+            clauses.append(f"(statement = ? AND label IN ({placeholders}))")
+            params.extend([statement, *labels])
+
+        sql = (
+            "SELECT ticker, statement, label, value FROM financials "
+            f"WHERE value IS NOT NULL AND ({' OR '.join(clauses)}) "
+            "ORDER BY ticker, statement, label, period DESC"
+        )
+        out: dict[str, dict[tuple[str, str], list[float]]] = {}
+        for row in self.conn.execute(sql, params):
+            key = (row["statement"], row["label"])
+            out.setdefault(row["ticker"], {}).setdefault(key, []).append(row["value"])
+        return out
+
+    def all_valuations(self) -> dict[str, dict[str, dict[str, float | None]]]:
+        """Every valuation field for every company, in one query."""
+        out: dict[str, dict[str, dict[str, float | None]]] = {}
+        for row in self.conn.execute("SELECT ticker, model, field, value FROM valuations"):
+            out.setdefault(row["ticker"], {}).setdefault(row["model"], {})[row["field"]] = row["value"]
+        return out
+
     def scraped_tickers(self) -> list[str]:
         """Companies that have actually been scraped, not just seeded from NSE."""
         return [
