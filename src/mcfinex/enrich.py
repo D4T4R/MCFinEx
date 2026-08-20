@@ -137,13 +137,7 @@ def _period_key(label: str) -> str | None:
 
 def _latest_by_label(store: Store, ticker: str) -> dict[str, float]:
     """Newest stored value for each schedule line item, keyed lower-case."""
-    rows = store.conn.execute(
-        "SELECT label, value FROM financials f WHERE ticker = ? AND statement = ? "
-        "AND period = (SELECT MAX(period) FROM financials WHERE ticker = f.ticker "
-        "AND statement = f.statement AND label = f.label)",
-        (ticker, SCHEDULE),
-    )
-    return {r["label"].strip().casefold(): r["value"] for r in rows if r["value"] is not None}
+    return store.schedule_latest(ticker)
 
 
 def _roll_up(latest: dict[str, float], wanted: tuple[str, ...]) -> float | None:

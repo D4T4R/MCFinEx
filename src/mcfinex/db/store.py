@@ -173,7 +173,8 @@ class Store:
         """
         return [
             r["ticker"] for r in self.conn.execute(
-                "SELECT ticker FROM companies WHERE isin LIKE 'INF%' ORDER BY ticker"
+                "SELECT ticker FROM companies WHERE isin LIKE ? ORDER BY ticker",
+                ("INF%",),
             )
         ]
 
@@ -283,6 +284,57 @@ class Store:
         for row in self.conn.execute("SELECT ticker, model, field, value FROM valuations"):
             out.setdefault(row["ticker"], {}).setdefault(row["model"], {})[row["field"]] = row["value"]
         return out
+
+    def sector_pe_rows(self) -> list[tuple[str | None, str | None, float]]:
+        """Industry, sector and P/E for every scraped, profitable company."""
+        return [
+            (r["industry"], r["sector"], r["stock_pe"]) for r in self.conn.execute(
+                "SELECT industry, sector, stock_pe FROM companies "
+                "WHERE stock_pe IS NOT NULL AND stock_pe > 0 AND last_updated IS NOT NULL"
+            )
+        ]
+
+    def quarterly_history(self, ticker: str, label: str) -> list[tuple[str, float]]:
+        """One quarterly line item oldest first, for trend analysis."""
+        return [
+            (r["period"], r["value"]) for r in self.conn.execute(
+                "SELECT period, value FROM financials WHERE ticker = ? "
+                "AND statement = 'quarters' AND label = ? AND value IS NOT NULL "
+                "ORDER BY period",
+                (ticker, label),
+            )
+        ]
+
+    def schedule_latest(self, ticker: str) -> dict[str, float]:
+        """Newest value for each schedule line item, keyed lower-case."""
+        rows = self.conn.execute(
+            "SELECT label, value FROM financials f WHERE ticker = ? AND statement = 'schedule' "
+            "AND period = (SELECT MAX(period) FROM financials WHERE ticker = f.ticker "
+            "AND statement = f.statement AND label = f.label)",
+            (ticker,),
+        )
+        return {r["label"].strip().casefold(): r["value"] for r in rows if r["value"] is not None}
+
+    def data_freshness(self) -> tuple[str | None, str | None]:
+        """Newest price date and scrape date across the universe."""
+        row = self.conn.execute(
+            "SELECT MAX(price_date), MAX(last_updated) FROM companies"
+        ).fetchone()
+        return (row[0], row[1]) if row else (None, None)
+
+    def valuation_rows(self, ticker: str) -> list[tuple[str, str, float | None]]:
+        """Every stored valuation field for one company."""
+        return [
+            (r["model"], r["field"], r["value"]) for r in self.conn.execute(
+                "SELECT model, field, value FROM valuations WHERE ticker = ? "
+                "ORDER BY model, field",
+                (ticker,),
+            )
+        ]
+
+    def compact(self) -> None:
+        """Reclaim space after a bulk delete."""
+        self.conn.execute("VACUUM")
 
     def scraped_tickers(self) -> list[str]:
         """Companies that have actually been scraped, not just seeded from NSE."""

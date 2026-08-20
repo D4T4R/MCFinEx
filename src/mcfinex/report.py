@@ -31,14 +31,10 @@ def sector_pe_medians(store: Store, *, min_sample: int = MIN_SECTOR_SAMPLE) -> d
     Loss-making companies are excluded; a negative P/E is not a cheap one.
     """
     buckets: dict[str, list[float]] = {}
-    rows = store.conn.execute(
-        "SELECT industry, sector, stock_pe FROM companies "
-        "WHERE stock_pe IS NOT NULL AND stock_pe > 0 AND last_updated IS NOT NULL"
-    )
-    for row in rows:
-        key = row["industry"] or row["sector"]
+    for industry, sector, stock_pe in store.sector_pe_rows():
+        key = industry or sector
         if key:
-            buckets.setdefault(key, []).append(row["stock_pe"])
+            buckets.setdefault(key, []).append(stock_pe)
     return {
         sector: statistics.median(values)
         for sector, values in buckets.items()

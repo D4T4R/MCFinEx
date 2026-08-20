@@ -121,9 +121,7 @@ def summary() -> dict[str, Any]:
     for row in rows:
         tiers[picks_module.classify(row).value] = tiers.get(picks_module.classify(row).value, 0) + 1
     with _store() as store:
-        priced = store.conn.execute(
-            "SELECT MAX(price_date), MAX(last_updated) FROM companies"
-        ).fetchone()
+        priced = store.data_freshness()
     return {
         "companies": len(rows),
         "tiers": tiers,
@@ -180,15 +178,11 @@ def company(ticker: str) -> dict[str, Any]:
 def _trend(store: Store, ticker: str, label: str, aliases: tuple[str, ...]) -> dict | None:
     """Eight-quarter trend for one line item."""
     for alias in aliases:
-        rows = store.conn.execute(
-            "SELECT period, value FROM financials WHERE ticker = ? AND statement = 'quarters' "
-            "AND label = ? AND value IS NOT NULL ORDER BY period",
-            (ticker, alias),
-        ).fetchall()
+        rows = store.quarterly_history(ticker, alias)
         if not rows:
             continue
-        periods = [date.fromisoformat(r["period"]) for r in rows]
-        trend = analyse(label, periods, [r["value"] for r in rows])
+        periods = [date.fromisoformat(p) for p, _ in rows]
+        trend = analyse(label, periods, [v for _, v in rows])
         return {
             "label": trend.label,
             "periods": [f"{p:%b %Y}" for p in trend.periods],

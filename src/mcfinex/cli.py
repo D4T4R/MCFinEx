@@ -222,7 +222,7 @@ def cmd_prune(args) -> int:
             log.info("re-run with --apply to delete them")
             return 0
         removed = store.remove(targets)
-        store.conn.execute("VACUUM")
+        store.compact()
     log.info("removed %d fund units", removed)
     return 0
 
@@ -305,13 +305,9 @@ def cmd_show(args) -> int:
         for key in ("sector", "industry", "current_price", "market_cap", "outstanding_shares",
                     "stock_pe", "latest_period", "last_updated"):
             print(f"  {key:22} {row[key]}")
-        for record in store.conn.execute(
-            "SELECT model, field, value FROM valuations WHERE ticker = ? ORDER BY model, field",
-            (ticker,),
-        ):
-            value = record["value"]
+        for model, field, value in store.valuation_rows(ticker):
             shown = "-" if value is None else f"{value:,.3f}"
-            print(f"  {record['model']:14} {record['field']:32} {shown}")
+            print(f"  {model:14} {field:32} {shown}")
     return 0
 
 

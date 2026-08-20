@@ -401,14 +401,10 @@ def _trend_for(store: Store, ticker: str, label: str, aliases: tuple[str, ...]):
     from datetime import date as _date
 
     for alias in aliases:
-        rows = store.conn.execute(
-            "SELECT period, value FROM financials WHERE ticker = ? AND statement = 'quarters' "
-            "AND label = ? AND value IS NOT NULL ORDER BY period",
-            (ticker, alias),
-        ).fetchall()
+        rows = store.quarterly_history(ticker, alias)
         if rows:
-            return analyse(label, [_date.fromisoformat(r["period"]) for r in rows],
-                           [r["value"] for r in rows])
+            return analyse(label, [_date.fromisoformat(p) for p, _ in rows],
+                           [v for _, v in rows])
     return None
 
 
