@@ -43,6 +43,20 @@ VALUATION_LABELS = [
 # pandas Styler.format takes str.format specs, not printf ones. A printf spec
 # such as "%.2f" is passed through verbatim, so every price rendered as the
 # literal text "%.2f" rather than a number.
+#: Always shown: what identifies a row and what every screen is judged on.
+IDENTITY_COLUMNS = ["Ticker", "Company", "Sector", "Price",
+                    "BUY signals", "SELL signals", "Scored"]
+#: Shown when no particular signal is selected.
+DEFAULT_NUMERIC_COLUMNS = ["EV/EBITDA target", "Upside %", "Entry 3/4", "Entry 2/3",
+                           "PE yearly target", "PE quarterly target"]
+#: Numeric columns each signal brings with it when selected on its own.
+SIGNAL_COMPANIONS = {
+    "EV/EBITDA upside %": ["EV/EBITDA target", "Upside %", "Entry 3/4", "Entry 2/3"],
+    "EV/EBITDA upside % (net debt)": ["EV/EBITDA target", "Upside %"],
+    "P/E re-rating % (yearly)": ["PE yearly target"],
+    "P/E re-rating % (quarterly)": ["PE quarterly target"],
+}
+
 NUMERIC_FORMATS = {
     "Price": "{:,.2f}",
     "Upside %": "{:+.1f}",
@@ -83,9 +97,9 @@ def main() -> None:
         st.warning("Nothing scraped yet. Run `mcfinex scrape --from-template`.")
         return
 
-    filtered = _sidebar(frame)
+    filtered, columns = _sidebar(frame)
     _overview(frame, filtered)
-    _table(filtered)
+    _table(filtered, columns)
     _drilldown(filtered, detail)
 
 
@@ -105,6 +119,8 @@ def _sidebar(frame: pd.DataFrame) -> pd.DataFrame:
                                   int(frame["SELL signals"].max()))
     only_upside = st.sidebar.checkbox("Only positive EV/EBITDA upside")
 
+    signals, verdicts, match_all = _signal_filter(frame)
+
     out = frame[(frame["BUY signals"] >= min_buys) & (frame["SELL signals"] <= max_sells)]
     if chosen:
         out = out[out["Sector"].isin(chosen)]
@@ -114,9 +130,67 @@ def _sidebar(frame: pd.DataFrame) -> pd.DataFrame:
         out = out[mask]
     if only_upside:
         out = out[out["Upside %"].fillna(-1) > 0]
+    if signals and verdicts:
+        out = out[_verdict_mask(out, signals, verdicts, match_all=match_all)]
 
     st.sidebar.caption(f"{len(out)} of {len(frame)} companies")
-    return out
+    return out, _visible_columns(frame, signals)
+
+
+def _signal_filter(frame: pd.DataFrame):
+    """Pick which measures to show, and which verdicts to keep.
+
+    The two work together: choosing a measure narrows the columns, choosing a
+    verdict narrows the rows, and choosing both asks "show me the companies this
+    measure rates that way".
+    """
+    st.sidebar.divider()
+    available = [c for c in FUNDAMENTAL_LABELS + VALUATION_LABELS if c in frame.columns]
+    signals = st.sidebar.multiselect(
+        "Measure", available,
+        help="Which signals to show as columns. None selected shows them all.",
+    )
+    verdicts = st.sidebar.multiselect(
+        "Verdict", [v.value for v in Verdict],
+        help="Keep only companies whose selected measures read this way.",
+    )
+    match_all = False
+    if len(signals) > 1 and verdicts:
+        match_all = st.sidebar.radio(
+            "Match", ["Any selected measure", "All selected measures"],
+            help="Whether a company must satisfy one of the chosen measures or every one.",
+        ) == "All selected measures"
+    if verdicts and not signals:
+        st.sidebar.caption("Pick a measure for the verdict filter to act on.")
+    return signals, verdicts, match_all
+
+
+def _verdict_mask(frame: pd.DataFrame, signals: list[str], verdicts: list[str],
+                  *, match_all: bool) -> pd.Series:
+    matches = [frame[column].isin(verdicts) for column in signals if column in frame.columns]
+    if not matches:
+        return pd.Series(True, index=frame.index)
+    combined = matches[0]
+    for other in matches[1:]:
+        combined = (combined & other) if match_all else (combined | other)
+    return combined
+
+
+def _visible_columns(frame: pd.DataFrame, signals: list[str]) -> list[str]:
+    """Identity columns, then whichever measures were asked for."""
+    if not signals:
+        wanted = DEFAULT_NUMERIC_COLUMNS + [
+            c for c in FUNDAMENTAL_LABELS + VALUATION_LABELS if c in frame.columns
+        ]
+    else:
+        companions: list[str] = []
+        for signal in signals:
+            for extra in SIGNAL_COMPANIONS.get(signal, []):
+                if extra not in companions:
+                    companions.append(extra)
+        wanted = companions + signals
+    ordered = IDENTITY_COLUMNS + [c for c in wanted if c not in IDENTITY_COLUMNS]
+    return [c for c in ordered if c in frame.columns]
 
 
 def _overview(frame: pd.DataFrame, filtered: pd.DataFrame) -> None:
@@ -129,18 +203,19 @@ def _overview(frame: pd.DataFrame, filtered: pd.DataFrame) -> None:
     d.metric("Median upside %", f"{upside.median():.1f}" if len(upside) else "-")
 
 
-def _table(filtered: pd.DataFrame) -> None:
+def _table(filtered: pd.DataFrame, columns: list[str]) -> None:
     st.subheader("Screen")
-    verdict_cols = [c for c in filtered.columns if c in FUNDAMENTAL_LABELS + VALUATION_LABELS]
+    shown = filtered[columns]
+    verdict_cols = [c for c in shown.columns if c in FUNDAMENTAL_LABELS + VALUATION_LABELS]
     styled = (
-        filtered.sort_values(["BUY signals", "SELL signals"], ascending=[False, True])
+        shown.sort_values(["BUY signals", "SELL signals"], ascending=[False, True])
         .style.map(lambda v: VERDICT_COLOUR.get(v, ""), subset=verdict_cols)
-        .format(NUMERIC_FORMATS, na_rep="-")
+        .format({k: v for k, v in NUMERIC_FORMATS.items() if k in shown.columns}, na_rep="-")
     )
     st.dataframe(styled, width='stretch', height=520)
     st.download_button(
         "Download as CSV",
-        filtered.to_csv(index=False).encode(),
+        shown.to_csv(index=False).encode(),
         file_name="mcfinex_screen.csv",
         mime="text/csv",
     )

@@ -150,3 +150,102 @@ class TestQuarterlyTrends:
         labelled = pd.DataFrame({"Sales": [1, 2, 3, 4]},
                                 index=[f"{p:%b %y}" for p in periods])
         assert list(labelled.index) != sorted(labelled.index)
+
+
+class TestMeasureAndVerdictFilters:
+    """Measure narrows the columns, verdict narrows the rows, together they compose."""
+
+    def test_no_measure_selected_shows_every_signal_column(self, app):
+        from mcfinex.ui import dashboard
+
+        import pandas as pd
+
+        frame = pd.DataFrame(columns=dashboard.IDENTITY_COLUMNS
+                             + dashboard.DEFAULT_NUMERIC_COLUMNS
+                             + ["ROCE %", "Price / book"])
+        columns = dashboard._visible_columns(frame, [])
+        assert "ROCE %" in columns and "Price / book" in columns
+
+    def test_selecting_a_measure_narrows_the_columns(self):
+        from mcfinex.ui import dashboard
+
+        import pandas as pd
+
+        frame = pd.DataFrame(columns=dashboard.IDENTITY_COLUMNS + ["ROCE %", "Price / book"])
+        columns = dashboard._visible_columns(frame, ["ROCE %"])
+        assert "ROCE %" in columns
+        assert "Price / book" not in columns
+
+    def test_identity_columns_always_survive(self):
+        from mcfinex.ui import dashboard
+
+        import pandas as pd
+
+        frame = pd.DataFrame(columns=dashboard.IDENTITY_COLUMNS + ["ROCE %"])
+        columns = dashboard._visible_columns(frame, ["ROCE %"])
+        for essential in ("Ticker", "Company", "Price", "BUY signals"):
+            assert essential in columns
+
+    def test_ev_ebitda_brings_its_target_and_entry_columns(self):
+        from mcfinex.ui import dashboard
+
+        import pandas as pd
+
+        frame = pd.DataFrame(columns=dashboard.IDENTITY_COLUMNS
+                             + dashboard.DEFAULT_NUMERIC_COLUMNS
+                             + ["EV/EBITDA upside %"])
+        columns = dashboard._visible_columns(frame, ["EV/EBITDA upside %"])
+        assert "EV/EBITDA target" in columns and "Entry 2/3" in columns
+        assert "PE yearly target" not in columns
+
+    def test_any_match_keeps_a_row_satisfying_one_measure(self):
+        from mcfinex.ui import dashboard
+
+        import pandas as pd
+
+        frame = pd.DataFrame({"ROCE %": ["BUY", "SELL"], "Price / book": ["SELL", "SELL"]})
+        mask = dashboard._verdict_mask(frame, ["ROCE %", "Price / book"], ["BUY"],
+                                       match_all=False)
+        assert list(mask) == [True, False]
+
+    def test_all_match_requires_every_measure(self):
+        from mcfinex.ui import dashboard
+
+        import pandas as pd
+
+        frame = pd.DataFrame({"ROCE %": ["BUY", "BUY"], "Price / book": ["BUY", "SELL"]})
+        mask = dashboard._verdict_mask(frame, ["ROCE %", "Price / book"], ["BUY"],
+                                       match_all=True)
+        assert list(mask) == [True, False]
+
+    def test_several_verdicts_are_a_union(self):
+        from mcfinex.ui import dashboard
+
+        import pandas as pd
+
+        frame = pd.DataFrame({"ROCE %": ["BUY", "HOLD", "SELL"]})
+        mask = dashboard._verdict_mask(frame, ["ROCE %"], ["BUY", "HOLD"], match_all=False)
+        assert list(mask) == [True, True, False]
+
+    def test_a_measure_absent_from_the_frame_is_ignored(self):
+        from mcfinex.ui import dashboard
+
+        import pandas as pd
+
+        frame = pd.DataFrame({"ROCE %": ["BUY", "SELL"]})
+        mask = dashboard._verdict_mask(frame, ["Nonexistent"], ["BUY"], match_all=False)
+        assert list(mask) == [True, True]
+
+
+class TestFilterInteraction:
+    def test_measure_and_verdict_narrow_the_table_together(self, app):
+        before = int(app.metric[1].value)
+        app.sidebar.multiselect[1].select("Price / book").run()   # Measure
+        app.sidebar.multiselect[2].select("SELL").run()           # Verdict
+        assert not app.exception
+        assert int(app.metric[1].value) <= before
+
+    def test_verdict_without_a_measure_changes_nothing(self, app):
+        before = int(app.metric[1].value)
+        app.sidebar.multiselect[2].select("SELL").run()
+        assert int(app.metric[1].value) == before

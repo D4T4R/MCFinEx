@@ -118,6 +118,22 @@ The projection is a seasonal naive forecast with drift, labelled with a
 confidence derived from how stable that growth has been. It is arithmetic on
 published figures, not a prediction.
 
+### Filtering by measure and verdict
+
+The detail page's sidebar carries a **Measure** and a **Verdict** selector that
+work together, the way a BI tool composes metrics and filters. Choosing a
+measure narrows the columns to that signal and whatever numbers belong with it
+— selecting EV/EBITDA also brings its target and both entry prices. Choosing a
+verdict narrows the rows to companies the selected measures rate that way.
+
+With more than one measure chosen, a **Match** control decides whether a company
+must satisfy any of them or all. Across the current universe that is the
+difference between 1,967 companies (`Price / book` or `ROCE %` reading SELL) and
+289 (both reading SELL).
+
+A verdict on its own does nothing, since there is no measure for it to apply to;
+the sidebar says so rather than silently ignoring it.
+
 ### Why a signal reads the way it does
 
 Selecting any signal on the detail page opens its working: the inputs, the
@@ -310,7 +326,7 @@ src/mcfinex/
   sources/screener.py  company page parser
   sources/nse.py       bhavcopy loader
   export/workbook.py   SSP workbook writer
-tests/               277 tests; screener parsing runs off a saved fixture,
+tests/               287 tests; screener parsing runs off a saved fixture,
                      the dashboard off Streamlit's AppTest harness
 ```
 
