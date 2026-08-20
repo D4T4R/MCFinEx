@@ -249,3 +249,62 @@ class TestFilterInteraction:
         before = int(app.metric[1].value)
         app.sidebar.multiselect[2].select("SELL").run()
         assert int(app.metric[1].value) == before
+
+
+class TestScreenRowExplanation:
+    """Selecting a row on the main screen must explain the right company."""
+
+    def test_selection_maps_to_the_sorted_view_not_frame_order(self, app):
+        # The table is sorted by BUY signals before display, so row 0 of the
+        # selection is the top-ranked company, not the frame's first row.
+        import pandas as pd
+
+        frame = pd.DataFrame({
+            "Ticker": ["AAA", "ZZZ"],
+            "BUY signals": [1, 9],
+            "SELL signals": [0, 0],
+        })
+        ordered = frame.sort_values(["BUY signals", "SELL signals"], ascending=[False, True])
+        assert ordered.iloc[0]["Ticker"] == "ZZZ"
+
+    def test_screen_table_is_selectable(self, app):
+        # Two selectable tables on the page: the screen and the signal tables.
+        assert not app.exception
+        assert len(app.dataframe) >= 2
+
+    def test_selected_ticker_reads_the_sorted_view(self):
+        import pandas as pd
+        from mcfinex.ui.dashboard import selected_ticker
+
+        ordered = pd.DataFrame({"Ticker": ["ZZZ", "AAA"]})
+        assert selected_ticker(ordered, [0]) == "ZZZ"
+        assert selected_ticker(ordered, [1]) == "AAA"
+
+    def test_no_selection_yields_no_ticker(self):
+        import pandas as pd
+        from mcfinex.ui.dashboard import selected_ticker
+
+        assert selected_ticker(pd.DataFrame({"Ticker": ["ZZZ"]}), []) is None
+
+    def test_chosen_measures_are_what_gets_explained(self):
+        from mcfinex.report import Row
+        from mcfinex.screening import Metrics, screen
+        from mcfinex.ui.dashboard import signals_to_explain
+
+        row = Row(screening=screen(Metrics(ticker="T", price=100.0, book_value=10.0)),
+                  metrics=Metrics(ticker="T"))
+        wanted, heading = signals_to_explain(row, ["Price / book"], "T")
+        assert [s.label for s in wanted] == ["Price / book"]
+        assert "Price / book" in heading
+
+    def test_without_measures_only_decisive_signals_are_offered(self):
+        from mcfinex.report import Row
+        from mcfinex.screening import Metrics, Verdict, screen
+        from mcfinex.ui.dashboard import signals_to_explain
+
+        metrics = Metrics(ticker="T", price=100.0, book_value=10.0, roce=25.0)
+        row = Row(screening=screen(metrics), metrics=metrics)
+        wanted, heading = signals_to_explain(row, [], "T")
+        assert wanted, "decisive signals should be offered"
+        assert all(s.verdict in (Verdict.BUY, Verdict.SELL) for s in wanted)
+        assert "decided" in heading

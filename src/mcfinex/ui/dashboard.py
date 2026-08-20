@@ -97,9 +97,10 @@ def main() -> None:
         st.warning("Nothing scraped yet. Run `mcfinex scrape --from-template`.")
         return
 
-    filtered, columns = _sidebar(frame)
+    filtered, columns, measures = _sidebar(frame)
     _overview(frame, filtered)
-    _table(filtered, columns)
+    picked = _table(filtered, columns)
+    _explain_row(picked, detail, measures)
     _drilldown(filtered, detail)
 
 
@@ -134,7 +135,7 @@ def _sidebar(frame: pd.DataFrame) -> pd.DataFrame:
         out = out[_verdict_mask(out, signals, verdicts, match_all=match_all)]
 
     st.sidebar.caption(f"{len(out)} of {len(frame)} companies")
-    return out, _visible_columns(frame, signals)
+    return out, _visible_columns(frame, signals), signals
 
 
 def _signal_filter(frame: pd.DataFrame):
@@ -203,8 +204,9 @@ def _overview(frame: pd.DataFrame, filtered: pd.DataFrame) -> None:
     d.metric("Median upside %", f"{upside.median():.1f}" if len(upside) else "-")
 
 
-def _table(filtered: pd.DataFrame, columns: list[str]) -> None:
+def _table(filtered: pd.DataFrame, columns: list[str]) -> str | None:
     st.subheader("Screen")
+    st.caption("Select a row to see why its verdicts read the way they do.")
     shown = filtered[columns]
     verdict_cols = [c for c in shown.columns if c in FUNDAMENTAL_LABELS + VALUATION_LABELS]
     styled = (
@@ -212,13 +214,69 @@ def _table(filtered: pd.DataFrame, columns: list[str]) -> None:
         .style.map(lambda v: VERDICT_COLOUR.get(v, ""), subset=verdict_cols)
         .format({k: v for k, v in NUMERIC_FORMATS.items() if k in shown.columns}, na_rep="-")
     )
-    st.dataframe(styled, width='stretch', height=520)
+    ordered = shown.sort_values(["BUY signals", "SELL signals"], ascending=[False, True])
+    event = st.dataframe(
+        styled, width='stretch', height=520,
+        key="screen-table", on_select="rerun", selection_mode="single-row",
+    )
     st.download_button(
         "Download as CSV",
         shown.to_csv(index=False).encode(),
         file_name="mcfinex_screen.csv",
         mime="text/csv",
     )
+    rows = event.selection["rows"] if event and event.selection else []
+    return selected_ticker(ordered, rows)
+
+
+def signals_to_explain(row, measures: list[str], ticker: str):
+    """Which signals to open for a selected company, and the heading to use.
+
+    With measures chosen in the sidebar, those are what the reader is asking
+    about. Without any, the decisive signals -- the BUY and SELL ones -- are the
+    ones that moved the score; HOLD and UNKNOWN did not.
+    """
+    signals = row.screening.signals
+    if measures:
+        return [s for s in signals if s.label in measures], f"{ticker}: {', '.join(measures)}"
+    decisive = [s for s in signals if s.verdict in (Verdict.BUY, Verdict.SELL)]
+    return decisive, f"{ticker}: signals that decided the score"
+
+
+def selected_ticker(ordered: pd.DataFrame, rows: list[int]) -> str | None:
+    """Map a dataframe selection back to a ticker.
+
+    The index is into the sorted view the reader is looking at, not the frame's
+    own order, so the frame must be sorted the same way before indexing.
+    """
+    if not rows:
+        return None
+    return ordered.iloc[rows[0]]["Ticker"]
+
+
+def _explain_row(ticker: str | None, detail: dict, measures: list[str]) -> None:
+    """Explain a company picked from the main screen.
+
+    With measures chosen in the sidebar, those are what the reader is asking
+    about, so only those are explained. Without any, the decisive signals -- the
+    BUY and SELL ones -- are offered collapsed, since fourteen open panels would
+    bury the answer they came for.
+    """
+    if ticker is None:
+        return
+    row = detail.get(ticker)
+    if row is None:
+        return
+
+    wanted, heading = signals_to_explain(row, measures, ticker)
+    st.markdown(f"#### {heading}")
+    if not wanted:
+        st.info("No decisive signals for this company.")
+        return
+    for signal in wanted:
+        with st.expander(f"{signal.label} — {signal.verdict.value}",
+                         expanded=len(wanted) == 1):
+            _explain(signal)
 
 
 def _drilldown(filtered: pd.DataFrame, detail: dict) -> None:
