@@ -118,6 +118,19 @@ The projection is a seasonal naive forecast with drift, labelled with a
 confidence derived from how stable that growth has been. It is arithmetic on
 published figures, not a prediction.
 
+### Why a signal reads the way it does
+
+Selecting any signal on the detail page opens its working: the inputs, the
+formula, the arithmetic, the threshold it crossed, and what the measure means.
+HBL Engineering's Price / book, for instance, resolves to `670.05 / 78.40 =
+8.55`, and 8.55 is above the 3 SELL line.
+
+Definitions are written in `screening.py` rather than quoted, with a link out
+to Investopedia for further reading. That link is a search URL, not a deep one:
+Investopedia blocks automated requests, so a `/terms/...` path cannot be
+verified from here, and a search that always resolves beats a deep link that
+might 404.
+
 ## API
 
 `mcfinex-api` serves the same screening over HTTP, read-only, from the database
@@ -297,7 +310,7 @@ src/mcfinex/
   sources/screener.py  company page parser
   sources/nse.py       bhavcopy loader
   export/workbook.py   SSP workbook writer
-tests/               267 tests; screener parsing runs off a saved fixture,
+tests/               277 tests; screener parsing runs off a saved fixture,
                      the dashboard off Streamlit's AppTest harness
 ```
 

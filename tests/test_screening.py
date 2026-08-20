@@ -182,3 +182,64 @@ class TestNewlyListed:
         # invalidate it the way it invalidates EPS.
         m = Metrics(ticker="T", quarters_reported=0, ev_ebitda_upside=30.0)
         assert screen(m).get("ev_ebitda").verdict is Verdict.BUY
+
+
+class TestExplanations:
+    """Every verdict must be able to show its working."""
+
+    def full(self):
+        return Metrics(
+            ticker="T", price=670.05, book_value=78.4, reserves=900.0,
+            equity_capital=100.0, other_liabilities=50.0, borrowings=10.0,
+            roce=59.4, dividend_yield=2.0, free_cash_flow=588.0,
+            stock_pe=23.8, sector_pe=29.7, promoter_holding=59.11,
+            current_assets=300.0, current_liabilities=45.0,
+            inventory_days=148.0, inventory_days_prior=160.0,
+            quarters_reported=12, ev_ebitda_upside=86.1,
+            ev_ebitda_upside_with_debt=85.8, pe_yearly_rerating=48.8,
+            pe_quarterly_rerating=26.1,
+        )
+
+    def test_every_scoreable_signal_explains_itself(self):
+        for signal in screen(self.full()).signals:
+            if signal.available:
+                assert signal.explanation is not None, signal.label
+
+    def test_price_to_book_shows_the_arithmetic(self):
+        signal = screen(self.full()).get("price_to_book")
+        assert signal.verdict is Verdict.SELL
+        assert signal.explanation.arithmetic(signal.value) == "670.05 / 78.40 = 8.55"
+
+    def test_reasoning_names_the_threshold_crossed(self):
+        signal = screen(self.full()).get("price_to_book")
+        assert "above 3.00" in signal.explanation.reasoning
+        assert "SELL" in signal.explanation.reasoning
+
+    def test_inputs_are_the_ones_in_the_formula(self):
+        explanation = screen(self.full()).get("price_to_book").explanation
+        assert dict(explanation.inputs) == {"Share price": 670.05, "Book value per share": 78.4}
+
+    def test_reference_is_a_resolvable_search_link(self):
+        # Investopedia blocks automated requests, so deep term URLs cannot be
+        # verified; a search link always resolves.
+        url = screen(self.full()).get("price_to_book").explanation.url
+        assert url.startswith("https://www.investopedia.com/search?q=")
+        assert "price" in url
+
+    def test_definitions_are_written_not_quoted(self):
+        # Original prose, so nothing is reproduced from the source.
+        for signal in screen(self.full()).signals:
+            if signal.explanation:
+                assert len(signal.explanation.definition) > 60
+
+    def test_unavailable_signals_need_no_explanation(self):
+        signal = screen(Metrics(ticker="T")).get("current_ratio")
+        assert not signal.available
+
+    def test_percentage_signals_carry_their_unit(self):
+        assert "%" in screen(self.full()).get("roce").explanation.reasoning
+
+    def test_hold_reasoning_names_both_bounds(self):
+        held = Metrics(ticker="T", price=200.0, book_value=100.0)  # 2.0x
+        reasoning = screen(held).get("price_to_book").explanation.reasoning
+        assert "between" in reasoning and "HOLD" in reasoning

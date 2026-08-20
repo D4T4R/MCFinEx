@@ -173,13 +173,18 @@ def _drilldown(filtered: pd.DataFrame, detail: dict) -> None:
 
     _enrich_control(ticker, row)
 
+    st.caption("Select any signal below to see the numbers behind its verdict.")
     left, right = st.columns(2)
     with left:
         st.markdown("**Fundamentals**")
-        st.dataframe(_signal_frame(s.fundamentals), width='stretch', hide_index=True)
+        chosen_fundamental = _selectable_signals(s.fundamentals, key=f"f-{ticker}")
     with right:
         st.markdown("**Valuation**")
-        st.dataframe(_signal_frame(s.valuations), width='stretch', hide_index=True)
+        chosen_valuation = _selectable_signals(s.valuations, key=f"v-{ticker}")
+
+    _explain(chosen_fundamental or chosen_valuation)
+
+    with right:
         st.markdown("**Entry prices**")
         st.dataframe(
             pd.DataFrame([
@@ -320,6 +325,51 @@ def _enrich_control(ticker: str, row) -> None:
     )
     st.cache_data.clear()
     st.rerun()
+
+
+def _selectable_signals(signals, *, key: str):
+    """Render a signal table whose rows can be clicked for the workings."""
+    event = st.dataframe(
+        _signal_frame(signals),
+        width="stretch", hide_index=True, key=key,
+        on_select="rerun", selection_mode="single-row",
+    )
+    rows = event.selection["rows"] if event and event.selection else []
+    return signals[rows[0]] if rows else None
+
+
+def _explain(signal) -> None:
+    """Show why one signal reads the way it does."""
+    if signal is None:
+        return
+    explanation = signal.explanation
+    if explanation is None:
+        st.info(f"{signal.label}: {signal.rule}. {signal.verdict.value}.")
+        return
+
+    with st.container(border=True):
+        st.markdown(f"### {signal.label} — {signal.verdict.value}")
+        st.write(explanation.reasoning)
+
+        working, meaning = st.columns([1, 1])
+        with working:
+            st.markdown("**The numbers**")
+            st.dataframe(
+                pd.DataFrame(
+                    [{"Input": name, "Value": _round(value)}
+                     for name, value in explanation.inputs],
+                ),
+                width="stretch", hide_index=True,
+            )
+            st.caption(f"Formula: {explanation.formula}")
+            arithmetic = explanation.arithmetic(signal.value)
+            if arithmetic:
+                st.code(arithmetic, language=None)
+            st.caption(f"Threshold: {signal.rule}")
+        with meaning:
+            st.markdown("**What it means**")
+            st.write(explanation.definition)
+            st.markdown(f"[Read more on Investopedia]({explanation.url})")
 
 
 def _signal_frame(signals) -> pd.DataFrame:
