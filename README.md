@@ -48,7 +48,8 @@ mcfinex enrich RELIANCE TCS           # pull balance-sheet detail for named comp
 mcfinex show RELIANCE                 # print stored values and valuations
 mcfinex screen --min-buys 6           # rank by BUY signals
 mcfinex screen --csv screen.csv       # or dump the whole screen
-mcfinex-dashboard                     # Streamlit UI on :8501
+mcfinex-dashboard                     # two-page Streamlit UI on :8501
+mcfinex-api                           # read-only JSON API on :8000
 mcfinex export                        # optional: fill a copy of the workbook
 ```
 
@@ -82,6 +83,58 @@ Settings are environment variables, all optional:
 | `MCFINEX_TEMPLATE` | `~/Downloads/SSP_Working_merged.xlsx` |
 | `MCFINEX_EXPORT` | `data/SSP_Working_populated.xlsx` |
 | `MCFINEX_REQUEST_DELAY` | `1.0` seconds between screener requests (see below) |
+
+## The two pages
+
+`Ideas` narrows; `Detailed screen` explores.
+
+The landing page shows cards, not a table, because 74% of the universe reports
+some EV/EBITDA upside — the model projects historical EBITDA growth and most
+companies have had some, so "cheap" on that measure alone selects almost
+nothing out. A pick therefore has to clear the workbook's own discipline and be
+corroborated:
+
+| Tier | Rule | Roughly |
+|---|---|---|
+| High conviction | Below the 2/3 entry price, 6+ BUY signals, all three models agreeing, excluding new listings and financials | 127 |
+| Below entry price | Below the 3/4 entry price | 1,031 |
+| Watch | Over 25% upside on EV/EBITDA alone | 305 |
+
+Ranked by corroboration before size of upside: a 400% upside on one model with
+two BUY signals is noise, and sorting on upside would put it top. Cards carry
+their own caveats — newly listed, financial, not enriched, thin history,
+implausible upside — so a number never travels without its qualification.
+
+**Sector heat** counts high-conviction names only. Counting everything below an
+entry price would cover 45% of the market, so a sector at 90% would sit barely
+above the base rate; high conviction is ~5%, so anything well above that means
+something.
+
+The detail page adds an **eight-quarter trend** per company with a projection.
+Growth there is year on year, each quarter against the same quarter twelve
+months earlier, because quarterly results are seasonal — the workbook's
+quarter-on-quarter comparison measured the calendar as much as the business.
+The projection is a seasonal naive forecast with drift, labelled with a
+confidence derived from how stable that growth has been. It is arithmetic on
+published figures, not a prediction.
+
+## API
+
+`mcfinex-api` serves the same screening over HTTP, read-only, from the database
+alone — a page load never triggers a scrape.
+
+| Endpoint | Returns |
+|---|---|
+| `GET /summary` | universe size, tier counts, price and scrape dates |
+| `GET /picks?tier=&sector=&limit=` | ranked candidates |
+| `GET /sectors` | where conviction is clustering |
+| `GET /company/{ticker}` | signals, targets and eight-quarter trends |
+| `GET /health` | database path and company count |
+
+The landing page calls the Python layer directly rather than over HTTP, so the
+Streamlit route needs only one process. The API exists so a React front end can
+replace `Ideas` without any screening logic moving: `screening.py`, `picks.py`
+and `trends.py` import no framework, and a test asserts they never will.
 
 ## Workbook column map
 
@@ -234,12 +287,17 @@ src/mcfinex/
   db/store.py        parameterised persistence
   labels.py          screener line-item names and bank/NBFC aliases
   screening.py       BUY/HOLD/SELL signals (pure: no DB, no UI)
+  picks.py           tiering, ranking and sector heat (pure)
+  trends.py          eight-quarter analysis and projection (pure)
   report.py          store -> screening glue, sector median P/E
-  ui/dashboard.py    Streamlit screener
+  api.py             read-only FastAPI over the database
+  ui/app.py          page navigation
+  ui/ideas.py        landing page: shortlist as cards
+  ui/dashboard.py    detailed screen: table, search, drill-down
   sources/screener.py  company page parser
   sources/nse.py       bhavcopy loader
   export/workbook.py   SSP workbook writer
-tests/               205 tests; screener parsing runs off a saved fixture,
+tests/               267 tests; screener parsing runs off a saved fixture,
                      the dashboard off Streamlit's AppTest harness
 ```
 

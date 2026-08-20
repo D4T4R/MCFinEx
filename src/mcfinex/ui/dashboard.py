@@ -20,6 +20,7 @@ from mcfinex.db.store import Store
 from mcfinex.enrich import enrich
 from mcfinex.report import screen_all
 from mcfinex.sources.screener import ScreenerError
+from mcfinex.trends import TREND_LINES, analyse
 from mcfinex.screening import Verdict
 
 VERDICT_COLOUR = {
@@ -67,8 +68,7 @@ def load(db_path: str) -> tuple[pd.DataFrame, dict]:
 
 
 def main() -> None:
-    st.set_page_config(page_title="MCFinEx Screener", page_icon="📈", layout="wide")
-    st.title("MCFinEx Screener")
+    st.title("Detailed screen")
 
     # Resolved per run rather than from the module-level singleton, which
     # freezes the environment at import time.
@@ -194,6 +194,63 @@ def _drilldown(filtered: pd.DataFrame, detail: dict) -> None:
             ]),
             width='stretch', hide_index=True,
         )
+
+    _quarterly_trends(ticker)
+
+
+def _quarterly_trends(ticker: str) -> None:
+    """Eight quarters of Sales, Operating Profit and EPS, with a projection.
+
+    Year-over-year rather than quarter-on-quarter: quarterly results are
+    seasonal, and comparing a December against a September measures the calendar
+    rather than the business.
+    """
+    with Store(str(Settings.from_env().db_path)) as store:
+        trends = [t for t in (_trend_for(store, ticker, label, aliases)
+                              for label, aliases in TREND_LINES) if t]
+    if not trends:
+        return
+
+    st.markdown("**Last eight quarters**")
+    st.caption(
+        "Growth is year on year, each quarter against the same quarter a year "
+        "earlier. The projection assumes next quarter repeats last year's same "
+        "quarter, grown at the recent rate — arithmetic, not a prediction."
+    )
+    for trend in trends:
+        head, chart = st.columns([1, 2])
+        with head:
+            st.markdown(f"**{trend.label}**")
+            if trend.ttm_growth_pct is not None:
+                st.metric("TTM", f"{trend.ttm:,.0f}", f"{trend.ttm_growth_pct:+.1f}% YoY")
+            if trend.forecast is not None:
+                st.caption(
+                    f"{trend.forecast_period}: **{trend.forecast:,.1f}** "
+                    f"({trend.confidence.value.lower()} confidence)"
+                )
+            elif trend.note:
+                st.caption(trend.note)
+        with chart:
+            st.bar_chart(
+                pd.DataFrame({trend.label: trend.values},
+                             index=[f"{p:%b %y}" for p in trend.periods]),
+                height=150,
+            )
+
+
+def _trend_for(store: Store, ticker: str, label: str, aliases: tuple[str, ...]):
+    from datetime import date as _date
+
+    for alias in aliases:
+        rows = store.conn.execute(
+            "SELECT period, value FROM financials WHERE ticker = ? AND statement = 'quarters' "
+            "AND label = ? AND value IS NOT NULL ORDER BY period",
+            (ticker, alias),
+        ).fetchall()
+        if rows:
+            return analyse(label, [_date.fromisoformat(r["period"]) for r in rows],
+                           [r["value"] for r in rows])
+    return None
 
 
 def _round(value: float | None) -> float | None:

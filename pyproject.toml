@@ -19,10 +19,12 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
 ui = ["streamlit>=1.40", "pandas>=2.0"]
+api = ["fastapi>=0.115", "uvicorn[standard]>=0.30"]
 
 [project.scripts]
 mcfinex = "mcfinex.cli:main"
 mcfinex-dashboard = "mcfinex.ui.launch:main"
+mcfinex-api = "mcfinex.api_launch:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

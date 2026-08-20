@@ -7,7 +7,9 @@ from pathlib import Path
 
 from streamlit.web import cli as stcli
 
-APP = Path(__file__).with_name("dashboard.py")
+# The entry script must be the landing page: Streamlit builds its page
+# navigation from the `pages/` directory beside it.
+APP = Path(__file__).with_name("app.py")
 
 
 def main() -> int:

@@ -67,7 +67,7 @@ class TestRenders:
         assert not app.exception
 
     def test_title_is_shown(self, app):
-        assert "MCFinEx Screener" in app.title[0].value
+        assert "Detailed screen" in app.title[0].value
 
     def test_every_company_is_listed(self, app):
         assert app.metric[0].value == "3"
