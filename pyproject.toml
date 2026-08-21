@@ -20,6 +20,7 @@ dependencies = [
 dev = ["pytest>=8.0"]
 ui = ["streamlit>=1.40", "pandas>=2.0"]
 api = ["fastapi>=0.115", "uvicorn[standard]>=0.30"]
+postgres = ["psycopg[binary]>=3.1"]
 
 [project.scripts]
 mcfinex = "mcfinex.cli:main"

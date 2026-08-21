@@ -35,7 +35,9 @@ jobs:
           cache: pip
 
       - name: Install
-        run: pip install -e .
+        # The postgres extra: the job writes to the hosted database, and a
+        # plain install carries no driver.
+        run: pip install -e ".[postgres]"
 
       - name: Check the secret is present
         run: |

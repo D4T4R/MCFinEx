@@ -103,8 +103,14 @@ class Store:
         dsn = str(path)
         self.dialect = for_dsn(dsn)
         if self.dialect.is_postgres:
-            import psycopg
-            from psycopg.rows import dict_row
+            try:
+                import psycopg
+                from psycopg.rows import dict_row
+            except ImportError as exc:  # pragma: no cover - depends on install
+                raise RuntimeError(
+                    "This looks like a Postgres connection string, but the driver "
+                    "is not installed. Run: pip install '.[postgres]'"
+                ) from exc
 
             self.path = None
             raw = psycopg.connect(dsn, row_factory=dict_row, connect_timeout=20)
