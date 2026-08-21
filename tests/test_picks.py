@@ -140,3 +140,26 @@ class TestSectorHeat:
         rows += [make_row(sector="Big") for _ in range(4)]
         rows += [make_row(sector="Big", price=400.0, upside=2.0) for _ in range(40)]
         assert sector_heat(rows, min_companies=3)[0].sector == "Small"
+
+
+class TestNegativeTargets:
+    """A forecast of negative EBITDA is a real output, but not a price."""
+
+    def test_a_negative_target_is_not_actionable(self):
+        # Unguarded, every such company read as trading below its entry price:
+        # 129 of them on real data.
+        pick = to_pick(make_row(price=45.0, target=-50.0))
+        assert not pick.is_actionable
+        assert pick.discount_to_entry_pct is None
+
+    def test_it_is_flagged(self):
+        assert "model target is negative" in to_pick(make_row(target=-50.0)).flags
+
+    def test_it_cannot_reach_a_tier_that_depends_on_entry_price(self):
+        assert classify(make_row(price=45.0, target=-50.0)) is not Tier.HIGH_CONVICTION
+        assert classify(make_row(price=45.0, target=-50.0)) is not Tier.BELOW_ENTRY
+
+    def test_a_positive_target_is_unaffected(self):
+        pick = to_pick(make_row(price=100.0, target=200.0))
+        assert pick.has_usable_target
+        assert pick.is_actionable

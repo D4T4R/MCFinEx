@@ -54,13 +54,25 @@ class Pick:
     flags: list[str]
 
     @property
+    def has_usable_target(self) -> bool:
+        """Whether the model produced a price anyone could act on.
+
+        A company whose EBITDA is forecast to go negative gets a negative
+        enterprise value and so a negative target. That is a real output --
+        the model is saying the operations are worth nothing -- but it is not
+        a price. Left unguarded, every such company reads as trading below its
+        entry price, which was true of 129 of them.
+        """
+        return self.target is not None and self.target > 0 and (self.entry_2by3 or 0) > 0
+
+    @property
     def discount_to_entry_pct(self) -> float | None:
         """How far below the 2/3 entry price it trades. Negative means above it.
 
         This is the actionable number: the target says what the model thinks it
         is worth, the entry price says where it becomes worth acting on.
         """
-        if self.price is None or not self.entry_2by3:
+        if self.price is None or not self.has_usable_target:
             return None
         return (self.entry_2by3 - self.price) / self.entry_2by3 * 100
 
@@ -92,6 +104,8 @@ def _flags(row) -> list[str]:
         flags.append("thin history")
     if (m.ev_ebitda_upside or 0) > IMPLAUSIBLE_UPSIDE_PCT:
         flags.append("upside implausibly large")
+    if (row.target_ev_ebitda or 0) <= 0:
+        flags.append("model target is negative")
     return flags
 
 
@@ -105,8 +119,11 @@ def classify(row) -> Tier:
     # meaningful EV/EBITDA, so neither can be corroborated the usual way.
     disqualified = m.newly_listed or m.is_financial
 
-    below_2by3 = bool(row.entry_2by3 and price < row.entry_2by3)
-    below_3by4 = bool(row.entry_3by4 and price < row.entry_3by4)
+    # A negative target makes every price look like a discount, so the entry
+    # tests only apply where the model produced a usable one.
+    usable = (row.target_ev_ebitda or 0) > 0
+    below_2by3 = bool(usable and row.entry_2by3 and price < row.entry_2by3)
+    below_3by4 = bool(usable and row.entry_3by4 and price < row.entry_3by4)
 
     if (below_2by3 and not disqualified
             and s.buy_count >= MIN_BUY_SIGNALS
