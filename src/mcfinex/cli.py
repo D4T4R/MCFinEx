@@ -121,11 +121,10 @@ def cmd_universe(args) -> int:
 
     with Store(args.db) as store:
         store.create_schema()
-        for listing in listings:
-            store.upsert_company(
-                listing.ticker,
-                {"isin": listing.isin, "current_price": listing.close},
-            )
+        store.upsert_companies(
+            ((l.ticker, {"isin": l.isin, "current_price": l.close}) for l in listings),
+            ("isin", "current_price"),
+        )
     log.info("seeded %d companies into %s", len(listings), redact(args.db))
     return 0
 

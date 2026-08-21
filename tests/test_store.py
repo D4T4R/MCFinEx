@@ -164,3 +164,34 @@ class TestValuations:
         store.upsert_company("SEEDED", {"isin": "IN123"})
         store.upsert_company("DONE", {"last_updated": "2026-01-01"})
         assert store.scraped_tickers() == ["DONE"]
+
+
+class TestBulkUpsert:
+    """Seeding the universe must not cost one round trip per company."""
+
+    def test_inserts_many(self, store):
+        rows = [(f"T{i}", {"isin": f"IN{i}", "current_price": float(i)}) for i in range(50)]
+        assert store.upsert_companies(rows, ("isin", "current_price")) == 50
+        assert store.company("T7")["isin"] == "IN7"
+
+    def test_updates_existing_without_duplicating(self, store):
+        store.upsert_companies([("ACME", {"current_price": 1.0})], ("current_price",))
+        store.upsert_companies([("ACME", {"current_price": 2.0})], ("current_price",))
+        assert store.company("ACME")["current_price"] == 2.0
+        assert len(store.all_companies()) == 0  # never scraped, so not "all companies"
+
+    def test_untouched_columns_survive(self, store):
+        store.upsert_company("ACME", {"name": "Acme Ltd", "last_updated": "2026-01-01"})
+        store.upsert_companies([("ACME", {"current_price": 5.0})], ("current_price",))
+        assert store.company("ACME")["name"] == "Acme Ltd"
+
+    def test_unknown_column_is_rejected(self, store):
+        with pytest.raises(ValueError, match="unknown company column"):
+            store.upsert_companies([("ACME", {"nope": 1})], ("nope",))
+
+    def test_empty_input_is_a_no_op(self, store):
+        assert store.upsert_companies([], ("current_price",)) == 0
+
+    def test_a_missing_value_becomes_null(self, store):
+        store.upsert_companies([("ACME", {})], ("current_price",))
+        assert store.company("ACME")["current_price"] is None

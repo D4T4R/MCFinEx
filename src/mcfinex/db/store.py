@@ -183,6 +183,35 @@ class Store:
         self.conn.execute(sql, [ticker, *(_scalar(values[c]) for c in cols)])
         self.conn.commit()
 
+    def upsert_companies(self, rows: Iterable[tuple[str, Mapping[str, Any]]],
+                         columns: Sequence[str]) -> int:
+        """Insert or update many companies in one statement.
+
+        Seeding the universe one company at a time is 2,529 round-trips plus
+        2,529 commits. Unnoticeable against a local file; roughly seventeen
+        minutes from a CI runner to a database on another continent.
+        """
+        unknown = set(columns) - set(COMPANY_COLUMNS)
+        if unknown:
+            raise ValueError(f"unknown company column(s): {sorted(unknown)}")
+
+        payload = [
+            (ticker, *(_scalar(values.get(c)) for c in columns))
+            for ticker, values in rows
+        ]
+        if not payload:
+            return 0
+        placeholders = ", ".join("?" for _ in range(len(columns) + 1))
+        assignments = ", ".join(f"{c} = excluded.{c}" for c in columns)
+        with self.conn:
+            self.conn.executemany(
+                f"INSERT INTO companies (ticker, {', '.join(columns)}) "
+                f"VALUES ({placeholders}) "
+                f"ON CONFLICT(ticker) DO UPDATE SET {assignments}",
+                payload,
+            )
+        return len(payload)
+
     def update_prices(self, prices: Mapping[str, float | None], as_of: date | str) -> int:
         """Set the closing price for companies already known, ignoring the rest.
 
