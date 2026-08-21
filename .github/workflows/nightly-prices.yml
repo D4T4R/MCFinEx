@@ -12,7 +12,7 @@ name: Nightly prices
 # no special handling.
 on:
   schedule:
-    - cron: "0 13 * * 1-5"
+    - cron: "0 19 * * 1-5"
   workflow_dispatch: {}
 
 # Never let two refreshes overlap: they write the same rows.
