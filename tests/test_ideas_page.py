@@ -64,9 +64,6 @@ class TestRenders:
     def test_cards_render_for_qualifying_companies(self, page):
         assert any("CHEAP" in m.value for m in page.markdown)
 
-    def test_carries_the_educational_disclaimer(self, page):
-        assert any("not investment advice" in c.value for c in page.caption)
-
 
 class TestRanking:
     def test_best_corroborated_appears_first(self, tmp_path, monkeypatch):
@@ -102,3 +99,23 @@ class TestEmptyStates:
     def test_a_tier_with_nothing_in_it_says_so(self, page):
         page.radio[0].set_value("Watch").run()
         assert not page.exception
+
+
+class TestDisclaimer:
+    """The app is public, so the caveat must reach the reader with the signals."""
+
+    def test_warning_appears_above_the_cards(self, page):
+        from mcfinex.disclaimer import SHORT
+
+        assert any(SHORT in w.value for w in page.warning)
+
+    def test_full_disclaimer_is_present(self, page):
+        assert any("not investment advice" in m.value.lower() for m in page.markdown)
+
+    def test_it_says_research_is_the_reader_s_job(self, page):
+        text = " ".join(m.value.lower() for m in page.markdown)
+        assert "do your own research" in text
+
+    def test_it_disclaims_registration(self, page):
+        text = " ".join(m.value.lower() for m in page.markdown)
+        assert "not a sebi-registered" in text or "not a sebi" in text

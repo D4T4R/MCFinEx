@@ -126,3 +126,17 @@ class TestNoNetwork:
         monkeypatch.setattr("requests.get", explode)
         for path in ("/health", "/summary", "/picks", "/sectors", "/company/CHEAP"):
             assert client.get(path).status_code == 200
+
+
+class TestDisclaimer:
+    """Consumers of the API get the caveat too, not just visitors to the page."""
+
+    def test_picks_carry_it(self, client):
+        assert "disclaimer" in client.get("/picks").json()
+
+    def test_company_detail_carries_it(self, client):
+        assert "disclaimer" in client.get("/company/CHEAP").json()
+
+    def test_it_is_in_the_openapi_description(self, client):
+        spec = client.get("/openapi.json").json()
+        assert "not investment advice" in spec["info"]["description"].lower()

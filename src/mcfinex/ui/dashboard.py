@@ -16,6 +16,7 @@ import streamlit as st
 # Absolute imports: `streamlit run` executes this file as __main__ rather than
 # as a package module, so relative imports would fail at startup.
 from mcfinex.config import Settings, database_ready as _database_ready
+from mcfinex.disclaimer import CSV_HEADER, FULL as _FULL_DISCLAIMER, SHORT as _SHORT_DISCLAIMER
 from mcfinex.db.store import Store
 from mcfinex.enrich import enrich
 from mcfinex.report import screen_all
@@ -84,6 +85,7 @@ def load(db_path: str, revision: str) -> tuple[pd.DataFrame, dict]:
 
 def main() -> None:
     st.title("Detailed screen")
+    st.warning(_SHORT_DISCLAIMER, icon=":material/info:")
 
     # Resolved per run rather than from the module-level singleton, which
     # freezes the environment at import time.
@@ -105,6 +107,9 @@ def main() -> None:
     picked = _table(filtered, columns)
     _explain_row(picked, detail, measures)
     _drilldown(filtered, detail)
+    st.divider()
+    with st.expander("Disclaimer — please read", expanded=False):
+        st.markdown(_FULL_DISCLAIMER)
 
 
 def _sidebar(frame: pd.DataFrame) -> pd.DataFrame:
@@ -222,9 +227,11 @@ def _table(filtered: pd.DataFrame, columns: list[str]) -> str | None:
         styled, width='stretch', height=520,
         key="screen-table", on_select="rerun", selection_mode="single-row",
     )
+    # The file outlives the page that explained it, so it carries the caveat.
+    csv = CSV_HEADER + "\n" + shown.to_csv(index=False)
     st.download_button(
         "Download as CSV",
-        shown.to_csv(index=False).encode(),
+        csv.encode(),
         file_name="mcfinex_screen.csv",
         mime="text/csv",
     )

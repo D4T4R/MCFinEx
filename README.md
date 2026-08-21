@@ -7,8 +7,13 @@ A Python rewrite of the Java/Selenium MCFinEx, which scraped moneycontrol.com by
 absolute XPath. Those XPaths no longer resolve, and neither does the NSE URL the
 old bhavcopy loader used.
 
-> Educational use only. Nothing here is investment advice, and no financial
-> decision should rest on numbers this tool produced.
+> **Not investment advice.** Every signal here is produced by a mechanical model
+> over publicly filed financials. The thresholds that turn a number into BUY,
+> HOLD or SELL were chosen by hand — a different set, on the same data, would
+> give different verdicts. The operator is not a SEBI-registered investment
+> adviser and offers no personalised advice. Do your own research, and consult
+> a registered adviser before making any investment decision. The full text is
+> in `src/mcfinex/disclaimer.py` and is shown on every page of the app.
 
 ## How it works
 
@@ -83,6 +88,22 @@ Settings are environment variables, all optional:
 | `MCFINEX_TEMPLATE` | `~/Downloads/SSP_Working_merged.xlsx` |
 | `MCFINEX_EXPORT` | `data/SSP_Working_populated.xlsx` |
 | `MCFINEX_REQUEST_DELAY` | `1.0` seconds between screener requests (see below) |
+
+## Scheduled jobs
+
+| Workflow | When | What |
+|---|---|---|
+| `nightly-prices` | 18:30 IST, weekdays | Closing prices and newly listed symbols |
+| `quarterly-fundamentals` | 15 Feb, May, Aug, Nov | Full re-scrape after results season |
+
+Indian companies have 45 days from a quarter's end to file, so the quarterly
+run is timed to land after most have reported. The May run also covers the
+annual report, for which SEBI allows 60 days — a few names file late enough to
+miss it, so a manual re-run at the end of May is worth doing.
+
+A full scrape is ~2,500 companies at 1.5s each, so 60–90 minutes. It re-scrapes
+only what is not already carrying the current quarter's results, so a re-run
+after a failure resumes rather than starting over.
 
 ## The two pages
 

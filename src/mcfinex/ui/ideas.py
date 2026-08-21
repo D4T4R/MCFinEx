@@ -18,6 +18,7 @@ import streamlit as st
 # Absolute imports: streamlit runs this as __main__, not as a package module.
 from mcfinex import picks as picks_module
 from mcfinex.config import Settings, database_ready as _database_ready
+from mcfinex.disclaimer import FULL as _FULL_DISCLAIMER, SHORT as _SHORT_DISCLAIMER
 from mcfinex.db.store import Store
 from mcfinex.picks import Tier
 from mcfinex.report import screen_all
@@ -68,6 +69,9 @@ def main() -> None:
         "Ranked by corroboration, not by size of upside. Screened from stored data — "
         "run `mcfinex prices` to refresh, then reload."
     )
+    # Above the signals, not buried under them: a reader who scrolls straight to
+    # the cards should still have met the caveat.
+    st.warning(_SHORT_DISCLAIMER, icon=":material/info:")
 
     _headline(all_picks, universe)
     tier = _controls()
@@ -87,10 +91,8 @@ def main() -> None:
 
     _sector_heat(heat)
     st.divider()
-    st.caption(
-        "Educational use only. These are the output of a mechanical model over "
-        "published financials, not investment advice."
-    )
+    with st.expander("Disclaimer — please read", expanded=False):
+        st.markdown(_FULL_DISCLAIMER)
 
 
 def _headline(all_picks, universe: int) -> None:

@@ -1,0 +1,75 @@
+name: Quarterly fundamentals
+
+# A full re-scrape of every company's financials, timed to land after results
+# season. Indian companies have 45 days from a quarter's end to file, so:
+#
+#   Feb 15  <- Q3, October to December
+#   May 15  <- Q4 and the annual report (SEBI allows 60 days, so some names
+#               file late in May; a second pass is worth running by hand)
+#   Aug 15  <- Q1, April to June
+#   Nov 15  <- Q2, July to September
+#
+# This is ~2,500 companies at roughly 1.5s each with the adaptive throttle, so
+# expect 60-90 minutes. Prices and new listings are the nightly job's business;
+# this one is only for figures that change when a company reports.
+on:
+  schedule:
+    - cron: "0 4 15 2,5,8,11 *"
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: "Only scrape this many companies (leave blank for all)"
+        required: false
+        type: string
+
+concurrency:
+  group: quarterly-fundamentals
+  cancel-in-progress: false
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    # Well clear of the expected 60-90 minutes, and under GitHub's six-hour cap.
+    timeout-minutes: 180
+    env:
+      MCFINEX_PG: ${{ secrets.MCFINEX_PG }}
+      # Screener rate-limits. A full-universe run at 0.7s was throttled from its
+      # 71st company; 1.5s completed with no rejections at all.
+      MCFINEX_REQUEST_DELAY: "1.5"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: pip install -e ".[postgres]"
+
+      - name: Check the secret is present
+        run: |
+          if [ -z "$MCFINEX_PG" ]; then
+            echo "MCFINEX_PG is not set. Add it under" \
+                 "Settings > Secrets and variables > Actions." >&2
+            exit 1
+          fi
+
+      - name: Pick up newly listed symbols
+        run: mcfinex universe
+
+      # Re-scrapes anything not already carrying this quarter's results, so a
+      # re-run after a failure resumes rather than starting over.
+      - name: Scrape fundamentals
+        run: |
+          if [ -n "${{ inputs.limit }}" ]; then
+            mcfinex scrape --all --limit "${{ inputs.limit }}"
+          else
+            mcfinex scrape --all
+          fi
+
+      - name: Refresh closing prices
+        run: mcfinex prices
+
+      - name: Show what the app will serve
+        run: mcfinex screen -n 15 --min-buys 8

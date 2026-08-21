@@ -308,3 +308,22 @@ class TestScreenRowExplanation:
         assert wanted, "decisive signals should be offered"
         assert all(s.verdict in (Verdict.BUY, Verdict.SELL) for s in wanted)
         assert "decided" in heading
+
+
+class TestDisclaimerOnTheScreen:
+    def test_warning_is_shown(self, app):
+        from mcfinex.disclaimer import SHORT
+
+        assert any(SHORT in w.value for w in app.warning)
+
+    def test_exported_csv_carries_the_caveat(self):
+        # The file outlives the page that explained it.
+        from mcfinex.disclaimer import CSV_HEADER
+
+        assert "not investment advice" in CSV_HEADER.lower()
+        assert CSV_HEADER.startswith("#")   # a comment, so parsers can skip it
+
+    def test_csv_header_is_a_single_line(self):
+        from mcfinex.disclaimer import CSV_HEADER
+
+        assert "\n" not in CSV_HEADER

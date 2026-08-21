@@ -23,6 +23,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from . import picks as picks_module
 from .config import Settings
 from .db.store import Store
+from .disclaimer import FULL as FULL_DISCLAIMER, SHORT as SHORT_DISCLAIMER
 from .report import screen_all
 from .trends import TREND_LINES, analyse
 
@@ -30,6 +31,7 @@ app = FastAPI(
     title="MCFinEx",
     version="1.0.0",
     summary="Screened Indian equities, served from the local database.",
+    description=FULL_DISCLAIMER,
 )
 
 # The landing page may be served from a different origin (a React dev server on
@@ -110,7 +112,11 @@ def list_picks(
     if sector:
         wanted = sector.casefold()
         ranked = [p for p in ranked if (p.sector or "").casefold() == wanted]
-    return {"count": len(ranked), "picks": [_as_dict(p) for p in ranked[:limit]]}
+    return {
+        "count": len(ranked),
+        "picks": [_as_dict(p) for p in ranked[:limit]],
+        "disclaimer": SHORT_DISCLAIMER,
+    }
 
 
 @app.get("/summary")
@@ -172,6 +178,7 @@ def company(ticker: str) -> dict[str, Any]:
             for s in row.screening.signals
         ],
         "trends": [t for t in trends if t],
+        "disclaimer": SHORT_DISCLAIMER,
     }
 
 
