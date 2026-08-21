@@ -1,5 +1,9 @@
 # Streamlit Community Cloud installs from this file. It mirrors the runtime
 # extras in pyproject.toml; the dev extras are deliberately absent.
+#
+# The project itself comes first: the pages import mcfinex.*, which needs the
+# package on the path, not merely present in the checkout.
+-e .
 requests>=2.31
 beautifulsoup4>=4.12
 lxml>=5.0

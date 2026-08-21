@@ -7,6 +7,15 @@ titles instead of being named after their filenames.
 from __future__ import annotations
 
 import os
+import sys
+from pathlib import Path
+
+# Streamlit Cloud runs this file directly. The pages import mcfinex.*, which
+# resolves only if the package is installed; requirements.txt asks for that
+# with `-e .`, and this covers the case where it did not take.
+_SRC = Path(__file__).resolve().parents[2]
+if str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
 
 import streamlit as st
 
