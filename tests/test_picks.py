@@ -7,9 +7,16 @@ from mcfinex.screening import Metrics, screen
 
 def make_row(*, price=100.0, target=200.0, upside=60.0, buys=7, sells=0,
              sector="Widgets", newly_listed=False, financial=False,
-             pe_yearly=180.0, pe_quarterly=170.0, enriched=True, quarters=12):
-    """A screened row with the levers the tiers depend on."""
-    metrics = Metrics(
+             pe_yearly=180.0, pe_quarterly=170.0, enriched=True, quarters=12,
+             **overrides):
+    """A screened row with the levers the tiers depend on.
+
+    ``buys`` walks a fixed ladder of signals, which cannot express a company
+    that is sound but expensive -- the ladder makes the cheapness signals BUY
+    before the last quality one. Named ``overrides`` set any Metrics field
+    directly for cases the ladder cannot reach.
+    """
+    fields = dict(
         ticker="ACME", name="Acme Ltd", sector=sector, price=price,
         ev_ebitda_upside=upside, is_financial=financial,
         quarters_reported=0 if newly_listed else quarters,
@@ -25,6 +32,7 @@ def make_row(*, price=100.0, target=200.0, upside=60.0, buys=7, sells=0,
         stock_pe=10.0 if buys >= 7 else 40.0, sector_pe=20.0,
         inventory_days=80.0 if buys >= 8 else 200.0, inventory_days_prior=100.0,
     )
+    metrics = Metrics(**{**fields, **overrides})
     return Row(
         screening=screen(metrics), metrics=metrics,
         target_ev_ebitda=target, target_pe_yearly=pe_yearly,
@@ -140,6 +148,72 @@ class TestSectorHeat:
         rows += [make_row(sector="Big") for _ in range(4)]
         rows += [make_row(sector="Big", price=400.0, upside=2.0) for _ in range(40)]
         assert sector_heat(rows, min_companies=3)[0].sector == "Small"
+
+
+class TestRerating:
+    """Sound businesses that have already moved, target still ahead.
+
+    The case this exists for: a share rises, its P/E and price-to-book turn SELL
+    *because* it rose, the headline score drops below every threshold, and the
+    company vanishes from the screens while still trading under its target.
+    """
+
+    def rerating_row(self, **kw):
+        # Welspun's shape: every quality signal sound, but the run has made it
+        # expensive, so P/E and price-to-book read SELL. Price sits above the
+        # 3/4 entry of 150 and below the 200 target, models still agreeing.
+        kw = {"price": 170.0, "target": 200.0, "upside": 20.0, "buys": 8,
+              "pe_yearly": 195.0, "pe_quarterly": 190.0,
+              "stock_pe": 68.0, "book_value": 17.0, **kw}
+        return make_row(**kw)
+
+    def test_a_risen_but_sound_company_is_tiered(self):
+        assert classify(self.rerating_row()) is Tier.RERATING
+
+    def test_price_based_sells_do_not_disqualify_it(self):
+        # buys=6 leaves P/E as a SELL: the whole point is to ignore that.
+        row = self.rerating_row()
+        assert row.screening.value_sell_count > 0
+        assert row.screening.quality_sell_count == 0
+        assert classify(row) is Tier.RERATING
+
+    def test_a_deteriorating_business_is_excluded(self):
+        # buys=3 puts genuine quality signals into SELL, not just cheapness ones.
+        row = self.rerating_row(buys=3)
+        assert row.screening.quality_sell_count > 0
+        assert classify(row) is not Tier.RERATING
+
+    def test_it_must_still_have_headroom(self):
+        # 5% left to the target is not an opportunity, it is a finished move.
+        assert classify(self.rerating_row(upside=5.0)) is not Tier.RERATING
+
+    def test_a_company_below_its_entry_price_stays_in_the_entry_tiers(self):
+        # Those tiers are stronger claims -- the margin of safety is intact --
+        # so this one must not poach from them.
+        assert classify(self.rerating_row(price=100.0)) is Tier.HIGH_CONVICTION
+        assert classify(self.rerating_row(price=149.0)) is Tier.BELOW_ENTRY
+
+    def test_one_lone_model_is_not_enough(self):
+        row = self.rerating_row(pe_yearly=50.0, pe_quarterly=40.0)
+        assert classify(row) is not Tier.RERATING
+
+    def test_a_negative_target_cannot_qualify(self):
+        assert classify(self.rerating_row(target=-50.0)) is not Tier.RERATING
+
+    def test_financials_and_new_listings_are_excluded(self):
+        assert classify(self.rerating_row(financial=True)) is not Tier.RERATING
+        assert classify(self.rerating_row(newly_listed=True)) is not Tier.RERATING
+
+    def test_it_is_not_presented_as_actionable(self):
+        # It trades above the entry price, so the margin of safety is gone.
+        assert not to_pick(self.rerating_row()).is_actionable
+
+    def test_ranked_on_headroom_not_the_headline_score(self):
+        near = self.rerating_row(upside=16.0)
+        far = self.rerating_row(upside=90.0, target=400.0, price=320.0,
+                                pe_yearly=390.0, pe_quarterly=380.0)
+        ranked = rank([near, far], tier=Tier.RERATING)
+        assert [p.upside_pct for p in ranked] == [90.0, 16.0]
 
 
 class TestNegativeTargets:

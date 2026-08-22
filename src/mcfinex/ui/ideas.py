@@ -29,6 +29,13 @@ TIER_HELP = {
         "three valuation models agreeing. Excludes new listings and financials."
     ),
     Tier.BELOW_ENTRY: "Below the 3/4 entry price, but less corroborated.",
+    Tier.RERATING: (
+        "Already run past the entry price, with the EV/EBITDA target still "
+        "ahead. Four or more of the seven business-quality signals BUY and none "
+        "of them SELL — P/E and price-to-book are ignored here, because a share "
+        "that has risen fails those for having risen. Not a margin-of-safety "
+        "buy: the discount is gone, only the headroom is left."
+    ),
     Tier.WATCH: "Cheap on the EV/EBITDA model alone. Least corroborated.",
 }
 
@@ -97,17 +104,20 @@ def main() -> None:
 
 def _headline(all_picks, universe: int) -> None:
     counts = {t: sum(1 for p in all_picks if p.tier is t) for t in Tier}
-    a, b, c, d = st.columns(4)
+    a, b, c, d, e = st.columns(5)
     a.metric("Universe", f"{universe:,}")
     b.metric("High conviction", counts[Tier.HIGH_CONVICTION])
     c.metric("Below entry price", counts[Tier.BELOW_ENTRY])
+    d.metric("Re-rating", counts[Tier.RERATING],
+             help="Sound businesses already past their entry price, target still ahead")
     clean = sum(1 for p in all_picks if p.tier is Tier.HIGH_CONVICTION and not p.flags)
-    d.metric("Without caveats", clean,
+    e.metric("Without caveats", clean,
              help="High conviction and carrying no data-quality flags")
 
 
 def _controls() -> Tier:
-    labels = [Tier.HIGH_CONVICTION.value, Tier.BELOW_ENTRY.value, Tier.WATCH.value]
+    labels = [Tier.HIGH_CONVICTION.value, Tier.BELOW_ENTRY.value,
+              Tier.RERATING.value, Tier.WATCH.value]
     chosen = st.radio("Tier", labels, horizontal=True, label_visibility="collapsed")
     return Tier(chosen)
 
@@ -132,22 +142,41 @@ def _card(pick) -> None:
         st.markdown(f"**{pick.ticker}** · {pick.sector or '—'}")
         st.caption((pick.name or "")[:44])
 
+        rerating = pick.tier is Tier.RERATING
         left, right = st.columns(2)
         left.metric("Price", f"{pick.price:,.2f}" if pick.price else "—")
-        gap = pick.discount_to_entry_pct
-        right.metric(
-            "vs entry",
-            f"{gap:+.0f}%" if gap is not None else "—",
-            help="How far below its 2/3 entry price it trades. Positive means it is there now.",
-        )
+        if rerating:
+            # The discount is gone by definition, so reporting it would only
+            # ever show a negative number. What is left is the distance to the
+            # target, which is the reason the name is on this tier at all.
+            right.metric(
+                "Headroom",
+                f"{pick.upside_pct:+.0f}%" if pick.upside_pct is not None else "—",
+                help="How far below the EV/EBITDA target it still trades.",
+            )
+        else:
+            gap = pick.discount_to_entry_pct
+            right.metric(
+                "vs entry",
+                f"{gap:+.0f}%" if gap is not None else "—",
+                help="How far below its 2/3 entry price it trades. Positive means it is there now.",
+            )
 
         target = f"{pick.target:,.1f}" if pick.target else "—"
-        entry = f"{pick.entry_2by3:,.1f}" if pick.entry_2by3 else "—"
-        st.write(f"Target **{target}** · entry **{entry}**")
-        st.write(
-            f"{pick.buy_signals}/{pick.scored} BUY · {pick.models_agreeing}/3 models agree"
-            + (f" · {pick.sell_signals} SELL" if pick.sell_signals else "")
-        )
+        if rerating:
+            entry = f"{pick.entry_3by4:,.1f}" if pick.entry_3by4 else "—"
+            st.write(f"Target **{target}** · entry **{entry}** passed")
+            st.write(
+                f"{pick.quality_buys}/7 quality BUY · {pick.models_agreeing}/3 models agree"
+                + (f" · {pick.sell_signals} SELL on price" if pick.sell_signals else "")
+            )
+        else:
+            entry = f"{pick.entry_2by3:,.1f}" if pick.entry_2by3 else "—"
+            st.write(f"Target **{target}** · entry **{entry}**")
+            st.write(
+                f"{pick.buy_signals}/{pick.scored} BUY · {pick.models_agreeing}/3 models agree"
+                + (f" · {pick.sell_signals} SELL" if pick.sell_signals else "")
+            )
         for flag in pick.flags:
             st.caption(f":orange[⚠ {flag}]")
 

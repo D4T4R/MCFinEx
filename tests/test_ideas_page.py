@@ -58,8 +58,9 @@ class TestRenders:
     def test_shows_the_universe_size(self, page):
         assert page.metric[0].value == "2"
 
-    def test_offers_the_three_tiers(self, page):
-        assert page.radio[0].options == ["High conviction", "Below entry price", "Watch"]
+    def test_offers_every_tier(self, page):
+        assert page.radio[0].options == [
+            "High conviction", "Below entry price", "Re-rating", "Watch"]
 
     def test_cards_render_for_qualifying_companies(self, page):
         assert any("CHEAP" in m.value for m in page.markdown)

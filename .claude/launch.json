@@ -6,6 +6,12 @@
       "runtimeExecutable": ".venv/bin/streamlit",
       "runtimeArgs": ["run", "src/mcfinex/ui/dashboard.py", "--server.port", "8501", "--server.headless", "true"],
       "port": 8501
+    },
+    {
+      "name": "app",
+      "runtimeExecutable": ".venv/bin/streamlit",
+      "runtimeArgs": ["run", "src/mcfinex/ui/app.py", "--server.port", "8502", "--server.headless", "true"],
+      "port": 8502
     }
   ]
 }

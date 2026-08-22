@@ -12,6 +12,7 @@ from dataclasses import dataclass
 
 from . import labels
 from .db.store import Store
+from .picks import classify
 from .screening import Metrics, Screening, Verdict, screen
 
 BALANCE_SHEET = "balance-sheet"
@@ -117,6 +118,8 @@ class Row:
             "BUY signals": s.buy_count,
             "SELL signals": s.sell_count,
             "Scored": s.scored_count,
+            "Tier": classify(self).value,
+            "Quality BUY": s.quality_buy_count,
             "EV/EBITDA target": self.target_ev_ebitda,
             "Upside %": m.ev_ebitda_upside,
             "Entry 3/4": self.entry_3by4,

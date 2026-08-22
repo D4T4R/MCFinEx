@@ -81,6 +81,8 @@ def _as_dict(pick: picks_module.Pick) -> dict[str, Any]:
         "sell_signals": pick.sell_signals,
         "scored": pick.scored,
         "models_agreeing": pick.models_agreeing,
+        "quality_buys": pick.quality_buys,
+        "quality_sells": pick.quality_sells,
         "tier": pick.tier.value,
         "flags": pick.flags,
     }
@@ -96,7 +98,10 @@ def health() -> dict[str, Any]:
 
 @app.get("/picks")
 def list_picks(
-    tier: str | None = Query(None, description="High conviction | Below entry price | Watch"),
+    tier: str | None = Query(
+        None,
+        description="High conviction | Below entry price | Re-rating | Watch",
+    ),
     sector: str | None = None,
     limit: int = Query(60, ge=1, le=500),
 ) -> dict[str, Any]:

@@ -156,8 +156,40 @@ class Screening:
     def sell_count(self) -> int:
         return sum(1 for s in self.fundamentals if s.verdict is Verdict.SELL)
 
+    @property
+    def quality_buy_count(self) -> int:
+        """BUY signals about the business rather than about the price."""
+        return sum(1 for s in self.fundamentals
+                   if s.key in QUALITY_KEYS and s.verdict is Verdict.BUY)
+
+    @property
+    def quality_sell_count(self) -> int:
+        return sum(1 for s in self.fundamentals
+                   if s.key in QUALITY_KEYS and s.verdict is Verdict.SELL)
+
+    @property
+    def value_sell_count(self) -> int:
+        """SELL signals that only say the share has stopped being cheap."""
+        return sum(1 for s in self.fundamentals
+                   if s.key in VALUE_KEYS and s.verdict is Verdict.SELL)
+
     def get(self, key: str) -> Signal | None:
         return next((s for s in self.signals if s.key == key), None)
+
+
+#: Signals that measure the business: what it earns, owes and converts to cash.
+#: A SELL here is a statement about the company.
+QUALITY_KEYS = frozenset({
+    "promoter", "reserves_to_capital", "debt_to_equity", "current_ratio",
+    "roce", "inventory", "free_cash_flow",
+})
+
+#: Signals that measure the price paid for it. A SELL here is a statement about
+#: the *quote*, and flips to SELL precisely because the share went up -- so a
+#: company can be re-rating strongly and lose these two signals for that reason
+#: alone. Separating them is what lets a screen tell "deteriorating" apart from
+#: "no longer cheap".
+VALUE_KEYS = frozenset({"pe", "price_to_book", "dividend_yield"})
 
 
 def _band(value: float | None, *, buy: float, sell: float,

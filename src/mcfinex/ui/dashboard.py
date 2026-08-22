@@ -19,6 +19,7 @@ from mcfinex.config import Settings, database_ready as _database_ready
 from mcfinex.disclaimer import CSV_HEADER, FULL as _FULL_DISCLAIMER, SHORT as _SHORT_DISCLAIMER
 from mcfinex.db.store import Store
 from mcfinex.enrich import enrich
+from mcfinex.picks import Tier
 from mcfinex.report import screen_all
 from mcfinex.sources.screener import ScreenerError
 from mcfinex.trends import TREND_LINES, analyse
@@ -45,8 +46,8 @@ VALUATION_LABELS = [
 # such as "%.2f" is passed through verbatim, so every price rendered as the
 # literal text "%.2f" rather than a number.
 #: Always shown: what identifies a row and what every screen is judged on.
-IDENTITY_COLUMNS = ["Ticker", "Company", "Sector", "Price",
-                    "BUY signals", "SELL signals", "Scored"]
+IDENTITY_COLUMNS = ["Ticker", "Company", "Sector", "Price", "Tier",
+                    "BUY signals", "Quality BUY", "SELL signals", "Scored"]
 #: Shown when no particular signal is selected.
 DEFAULT_NUMERIC_COLUMNS = ["EV/EBITDA target", "Upside %", "Entry 3/4", "Entry 2/3",
                            "PE yearly target", "PE quarterly target"]
@@ -122,15 +123,32 @@ def _sidebar(frame: pd.DataFrame) -> pd.DataFrame:
     sectors = sorted(s for s in frame["Sector"].dropna().unique())
     chosen = st.sidebar.multiselect("Sector", sectors)
 
+    tiers = st.sidebar.multiselect(
+        "Tier", [t.value for t in Tier if t is not Tier.NONE],
+        help=("Which shortlist a company reaches. "
+              f"'{Tier.RERATING.value}' is the one the BUY-signal count hides: "
+              "sound businesses that have already run past their entry price."),
+    )
+
     max_buys = int(frame["BUY signals"].max())
     min_buys = st.sidebar.slider("Minimum BUY signals", 0, max_buys, 0)
     max_sells = st.sidebar.slider("Maximum SELL signals", 0, int(frame["SELL signals"].max()),
                                   int(frame["SELL signals"].max()))
+    min_quality = st.sidebar.slider(
+        "Minimum quality BUY signals", 0, 7, 0,
+        help=("Counts only the seven business signals, ignoring P/E, price-to-book "
+              "and dividend yield -- which turn SELL when a share rises, so the "
+              "headline count marks a company down for having gone up."),
+    )
     only_upside = st.sidebar.checkbox("Only positive EV/EBITDA upside")
 
     signals, verdicts, match_all = _signal_filter(frame)
 
     out = frame[(frame["BUY signals"] >= min_buys) & (frame["SELL signals"] <= max_sells)]
+    if min_quality:
+        out = out[out["Quality BUY"] >= min_quality]
+    if tiers:
+        out = out[out["Tier"].isin(tiers)]
     if chosen:
         out = out[out["Sector"].isin(chosen)]
     if search:
