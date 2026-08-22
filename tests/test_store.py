@@ -166,6 +166,174 @@ class TestValuations:
         assert store.scraped_tickers() == ["DONE"]
 
 
+class TestPostgresConnection:
+    """The connection must be autocommit, and it is not a style choice.
+
+    psycopg opens an implicit transaction on the first statement, a plain SELECT
+    included, and leaves it open. A later `with connection:` then finds
+    transaction_status != IDLE, downgrades itself to a SAVEPOINT, and exits with
+    RELEASE and no COMMIT -- so close() discards the write. That is what left the
+    hosted valuations stale while `mcfinex prices` logged success: the prices
+    committed because nothing had read yet, and the revalue that followed three
+    SELECTs did not.
+    """
+
+    def connect_kwargs(self, monkeypatch):
+        import sys
+        import types
+
+        seen = {}
+
+        def connect(dsn, **kwargs):
+            seen.update(kwargs)
+            return types.SimpleNamespace(
+                execute=lambda *a, **k: None, close=lambda: None,
+            )
+
+        fake = types.ModuleType("psycopg")
+        fake.connect = connect
+        rows = types.ModuleType("psycopg.rows")
+        rows.dict_row = object()
+        monkeypatch.setitem(sys.modules, "psycopg", fake)
+        monkeypatch.setitem(sys.modules, "psycopg.rows", rows)
+        Store("postgresql://u:p@h/db")
+        return seen
+
+    def test_autocommit_is_on(self, monkeypatch):
+        assert self.connect_kwargs(monkeypatch)["autocommit"] is True
+
+    def test_sqlite_is_untouched(self, store):
+        # The fix must not change local behaviour, which was always correct.
+        assert not store.dialect.is_postgres
+        store.upsert_company("AAA", {})
+        store.replace_valuations_bulk(["ev_ebitda"],
+                                      [("AAA", "ev_ebitda", "target_price", 1.0)])
+        assert store.valuation_fields("AAA", "ev_ebitda") == {"target_price": 1.0}
+
+
+class FakePostgres:
+    """Enough of psycopg's transaction protocol to show why autocommit matters.
+
+    Two rules, both taken from psycopg 3.3 rather than invented:
+
+    * a statement on an IDLE connection that is not in autocommit implicitly
+      begins a transaction (``BEGIN``), leaving it INTRANS;
+    * ``transaction()`` records ``_outer_transaction = status == IDLE``, and on
+      exit emits ``COMMIT`` only when that is true -- otherwise it opened a
+      savepoint and emits ``RELEASE``.
+
+    Closing discards anything not committed, as a real connection does.
+    """
+
+    def __init__(self, autocommit=False):
+        self.autocommit = autocommit
+        self.idle = True
+        self.log: list[str] = []
+        self.written: list[str] = []
+        self._committed: list[str] = []
+
+    def _statement(self):
+        if self.idle and not self.autocommit:
+            self.log.append("BEGIN")
+            self.idle = False
+
+    def execute(self, sql, params=()):
+        self._statement()
+        if not sql.strip().upper().startswith("SELECT"):
+            self.written.append(sql)
+        return self
+
+    def cursor(self):
+        return self
+
+    def executemany(self, sql, rows):
+        self._statement()
+        self.written.append(sql)
+        return self
+
+    def transaction(self):
+        outer = self.idle
+        fake = self
+
+        class Block:
+            def __enter__(self):
+                fake._statement()
+                return self
+
+            def __exit__(self, *exc):
+                if outer:
+                    fake.log.append("COMMIT")
+                    fake._committed.extend(fake.written)
+                    fake.written.clear()
+                    fake.idle = True
+                else:
+                    fake.log.append("RELEASE")
+                return False
+
+        return Block()
+
+    def commit(self):
+        if self.idle:
+            return                      # psycopg returns early when IDLE
+        self.log.append("COMMIT")
+        self._committed.extend(self.written)
+        self.written.clear()
+        self.idle = True
+
+    def close(self):
+        self.log.append("ROLLBACK(close)")
+        self.written.clear()
+
+    @property
+    def durable(self):
+        return self._committed
+
+
+class TestReadThenWriteCommits:
+    """A write that follows a read must still reach disk.
+
+    This is the shape of `mcfinex prices`: update prices, then revalue, which
+    reads three tables before writing. Without autocommit the write became a
+    savepoint and was discarded on close, silently.
+    """
+
+    def connection(self, autocommit):
+        from mcfinex.db.dialect import for_dsn
+        from mcfinex.db.store import _Connection
+
+        raw = FakePostgres(autocommit=autocommit)
+        return raw, _Connection(raw, for_dsn("postgresql://u:p@h/db"))
+
+    def revalue_shaped(self, conn):
+        conn.execute("SELECT * FROM companies")        # revalue_all reads first
+        conn.execute("SELECT * FROM financials")
+        with conn:
+            conn.executemany("INSERT INTO valuations ...", [(1,), (2,)])
+
+    def test_without_autocommit_the_write_is_lost(self):
+        raw, conn = self.connection(autocommit=False)
+        self.revalue_shaped(conn)
+        raw.close()
+        assert "COMMIT" not in raw.log and "RELEASE" in raw.log
+        assert raw.durable == []
+
+    def test_with_autocommit_the_write_commits(self):
+        raw, conn = self.connection(autocommit=True)
+        self.revalue_shaped(conn)
+        raw.close()
+        assert "COMMIT" in raw.log
+        assert [q.split(" SET")[0] for q in raw.durable] == ["INSERT INTO valuations ..."]
+
+    def test_a_write_with_no_preceding_read_always_committed(self):
+        # Why prices persisted while valuations did not: nothing had read yet,
+        # so that block was an outer transaction even without autocommit.
+        raw, conn = self.connection(autocommit=False)
+        with conn:
+            conn.executemany("UPDATE companies SET current_price = ?", [(1,)])
+        raw.close()
+        assert [q.split(" SET")[0] for q in raw.durable] == ["UPDATE companies"]
+
+
 class TestPostgresTransactionScope:
     """`with connection:` must not be able to hide a failure.
 

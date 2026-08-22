@@ -118,7 +118,25 @@ class Store:
                 ) from exc
 
             self.path = None
-            raw = psycopg.connect(dsn, row_factory=dict_row, connect_timeout=20)
+            # autocommit is not a relaxation here, it is what makes the
+            # transaction blocks below work at all.
+            #
+            # Without it psycopg opens an implicit transaction on the first
+            # statement -- including a plain SELECT -- and leaves it open. A
+            # later `with self.conn:` then sees transaction_status != IDLE and
+            # downgrades itself to a SAVEPOINT, whose exit emits RELEASE and no
+            # COMMIT. close() then rolls the lot back, silently.
+            #
+            # That is what left the hosted valuations stale: `mcfinex prices`
+            # committed the prices (nothing had read yet, so that block was a
+            # real transaction), then revalue_all read three tables, and the
+            # 78k-row write that followed became a savepoint and was discarded
+            # on close while the CLI logged success.
+            #
+            # With autocommit on, reads leave the connection IDLE, so every
+            # `with self.conn:` is an outer transaction that really commits.
+            raw = psycopg.connect(dsn, row_factory=dict_row, connect_timeout=20,
+                                  autocommit=True)
         else:
             self.path = Path(path)
             self.path.parent.mkdir(parents=True, exist_ok=True)
