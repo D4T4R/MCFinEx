@@ -166,6 +166,112 @@ class TestValuations:
         assert store.scraped_tickers() == ["DONE"]
 
 
+class TestPostgresTransactionScope:
+    """`with connection:` must not be able to hide a failure.
+
+    psycopg's Transaction returns True from __exit__ when it has rolled back and
+    wants the exception suppressed. Returning that verbatim made a failed write
+    indistinguishable from a successful one at the call site.
+    """
+
+    def connection(self, transaction):
+        from mcfinex.db.dialect import for_dsn
+        from mcfinex.db.store import _Connection
+
+        class Raw:
+            def transaction(self):
+                return transaction
+
+        return _Connection(Raw(), for_dsn("postgresql://u:p@h/db"))
+
+    def test_a_suppressing_transaction_does_not_swallow_the_error(self):
+        class Suppressing:
+            def __enter__(self): return self
+            def __exit__(self, *exc): return True      # "I handled it"
+
+        conn = self.connection(Suppressing())
+        with pytest.raises(ValueError):
+            with conn:
+                raise ValueError("write failed")
+
+    def test_the_transaction_is_still_closed(self):
+        closed = []
+
+        class Recording:
+            def __enter__(self): return self
+            def __exit__(self, *exc):
+                closed.append(exc[0])
+                return False
+
+        conn = self.connection(Recording())
+        with conn:
+            pass
+        assert closed == [None]
+
+    def test_a_clean_block_is_unaffected(self):
+        class Plain:
+            def __enter__(self): return self
+            def __exit__(self, *exc): return False
+
+        conn = self.connection(Plain())
+        with conn:
+            pass
+
+
+class TestBulkValuations:
+    """Replacing whole models at once, and proving the replacement landed.
+
+    This is the path that revalues the universe nightly. It reported success
+    against the hosted database while the stored figures did not move, so the
+    write is read back rather than trusted.
+    """
+
+    def rows(self, *tickers, target=100.0):
+        return [(t, "ev_ebitda", "target_price", target) for t in tickers]
+
+    def test_round_trip(self, store):
+        for t in ("AAA", "BBB"):
+            store.upsert_company(t, {})
+        assert store.replace_valuations_bulk(["ev_ebitda"], self.rows("AAA", "BBB")) == 2
+        assert store.valuation_fields("AAA", "ev_ebitda") == {"target_price": 100.0}
+
+    def test_it_replaces_rather_than_accumulates(self, store):
+        store.upsert_company("AAA", {})
+        store.replace_valuations_bulk(["ev_ebitda"], self.rows("AAA", target=100.0))
+        store.replace_valuations_bulk(["ev_ebitda"], self.rows("AAA", target=250.0))
+        assert store.valuation_fields("AAA", "ev_ebitda") == {"target_price": 250.0}
+
+    def test_untouched_models_survive(self, store):
+        store.upsert_company("AAA", {})
+        store.replace_valuations("AAA", "eps_yearly", {"target_price": 7.0})
+        store.replace_valuations_bulk(["ev_ebitda"], self.rows("AAA"))
+        assert store.valuation_fields("AAA", "eps_yearly") == {"target_price": 7.0}
+
+    def test_series_values_are_dropped_not_stored(self, store):
+        store.upsert_company("AAA", {})
+        rows = [("AAA", "ev_ebitda", "ebitda", [1.0, 2.0]),
+                ("AAA", "ev_ebitda", "target_price", 100.0)]
+        # The count must describe what was written, or the readback compares
+        # against a number the database was never asked to store.
+        assert store.replace_valuations_bulk(["ev_ebitda"], rows) == 1
+
+    def test_nothing_to_write_is_not_an_error(self, store):
+        assert store.replace_valuations_bulk(["ev_ebitda"], []) == 0
+
+    def test_a_write_that_does_not_persist_raises(self, store, monkeypatch):
+        """The failure that prompted the guard: a silent rollback.
+
+        Without this the caller logs "recomputed valuations for 2,544
+        companies" and the site keeps serving the previous prices.
+        """
+        store.upsert_company("AAA", {})
+        real = store.conn.executemany
+        monkeypatch.setattr(store.conn, "executemany",
+                            lambda sql, rows: real(sql, []))
+        with pytest.raises(RuntimeError, match="did not persist"):
+            store.replace_valuations_bulk(["ev_ebitda"], self.rows("AAA"))
+
+
 class TestBulkUpsert:
     """Seeding the universe must not cost one round trip per company."""
 

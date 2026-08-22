@@ -73,7 +73,12 @@ class _Connection:
     def __exit__(self, *exc):
         if self.dialect.is_postgres:
             transaction, self._transaction = self._transaction, None
-            return transaction.__exit__(*exc)
+            # Never return psycopg's value. A Transaction may return True to
+            # suppress the exception it rolled back on, which would let a failed
+            # write look like a successful one: the caller carries on and logs
+            # success while the database still holds the previous data.
+            transaction.__exit__(*exc)
+            return False
         return self._raw.__exit__(*exc)
 
     @property
@@ -291,6 +296,21 @@ class Store:
                 "INSERT INTO valuations (ticker, model, field, value, computed_at) "
                 "VALUES (?, ?, ?, ?, ?)",
                 payload,
+            )
+
+        # Read it back. A silently rolled-back transaction leaves the previous
+        # valuations in place, which is indistinguishable from success at the
+        # call site and leaves the site serving figures computed against an old
+        # price -- exactly the failure this method exists to prevent.
+        stored = self.conn.execute(
+            f"SELECT COUNT(*) AS n FROM valuations WHERE model IN ({placeholders}) "
+            "AND computed_at = ?",
+            (*models, stamp),
+        ).fetchone()["n"]
+        if stored != len(payload):
+            raise RuntimeError(
+                f"valuation write did not persist: expected {len(payload):,} rows "
+                f"stamped {stamp}, found {stored:,}"
             )
         return len(payload)
 
