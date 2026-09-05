@@ -243,3 +243,44 @@ class TestExplanations:
         held = Metrics(ticker="T", price=200.0, book_value=100.0)  # 2.0x
         reasoning = screen(held).get("price_to_book").explanation.reasoning
         assert "between" in reasoning and "HOLD" in reasoning
+
+
+class TestSignalTextIsReaderFacing:
+    """Signal text is rendered to whoever is reading, not to the operator.
+
+    It reaches the Streamlit table, the JSON API and the phone app. A reader
+    there has no repository, no virtualenv and no database -- an instruction to
+    run something is noise at best, and at worst reads as though the page is
+    broken and they should fix it.
+    """
+
+    #: Every subcommand in cli.py. A rule that names one is an instruction.
+    COMMANDS = ("enrich", "scrape", "prices", "publish", "init", "universe",
+                "screen", "export", "push", "prune", "show")
+
+    def all_signals(self):
+        # Empty metrics: every signal that can be UNKNOWN is, which is exactly
+        # the branch whose text tends to go unread.
+        bare = screen(Metrics(ticker="T")).signals
+        full = screen(Metrics(
+            ticker="T", price=100.0, book_value=50.0, stock_pe=10.0,
+            sector_pe=20.0, roce=25.0, dividend_yield=3.0, promoter_holding=70.0,
+            reserves=900.0, equity_capital=100.0, free_cash_flow=10.0,
+            current_assets=150.0, current_liabilities=100.0,
+            inventory_days=80.0, inventory_days_prior=100.0,
+        )).signals
+        return [*bare, *full]
+
+    def test_no_rule_tells_the_reader_to_run_a_command(self):
+        offenders = [
+            (s.key, s.rule) for s in self.all_signals()
+            if any(f"run {c}" in s.rule.lower() or f"mcfinex {c}" in s.rule.lower()
+                   for c in self.COMMANDS)
+        ]
+        assert offenders == []
+
+    def test_an_unavailable_current_ratio_says_why_not_what_to_type(self):
+        signal = screen(Metrics(ticker="T")).get("current_ratio")
+        assert not signal.available
+        assert "enrich" not in signal.rule
+        assert "split" in signal.rule

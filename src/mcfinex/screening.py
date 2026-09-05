@@ -334,8 +334,13 @@ def _current_ratio(m: Metrics) -> Signal:
     # schedules do. Until `mcfinex enrich` has fetched them this stays UNKNOWN
     # rather than guessed -- a fabricated current ratio is worse than none.
     if m.current_assets is None or not m.current_liabilities:
+        # Describes the world, not a remedy. This text is rendered to whoever is
+        # reading -- on the site, through the API and in the phone app -- and
+        # "run enrich" is an instruction only the operator can act on, on their
+        # own machine. Every other unavailable signal says why there is no
+        # reading; this one used to say what to type.
         return Signal("current_ratio", "Current ratio", Verdict.UNKNOWN, None,
-                      "run enrich to fetch the balance-sheet detail", available=False)
+                      "no current/non-current split published", available=False)
     ratio = m.current_assets / m.current_liabilities
     verdict = _band(ratio, buy=1.5, sell=1.0)
     return Signal(

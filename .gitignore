@@ -1,12 +1,15 @@
+# Leading slashes matter: an unanchored `data/` matches a directory of that
+# name at any depth, which silently excluded the phone app's whole data layer
+# at app/src/data/. These patterns all mean "the one at the repository root".
 .venv/
 __pycache__/
 *.py[cod]
 *.egg-info/
-build/
-dist/
+/build/
+/dist/
 
 # Scraped data and generated workbooks are outputs, not source.
-data/
+/data/
 *.db
 *.db-wal
 *.db-shm
@@ -20,7 +23,7 @@ data/
 .claude-flow/
 
 # Built by `mcfinex publish`; the deployed copy is generated in CI.
-site/
+/site/
 
 # Holds a live database credential.
 .streamlit/secrets.toml

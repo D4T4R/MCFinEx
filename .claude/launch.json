@@ -12,6 +12,19 @@
       "runtimeExecutable": ".venv/bin/streamlit",
       "runtimeArgs": ["run", "src/mcfinex/ui/app.py", "--server.port", "8502", "--server.headless", "true"],
       "port": 8502
+    },
+    {
+      "name": "site-data",
+      "runtimeExecutable": ".venv/bin/python",
+      "runtimeArgs": ["scripts/serve_site.py", "--dir", "site", "--port", "8531"],
+      "port": 8531
+    },
+    {
+      "name": "mobile-web",
+      "runtimeExecutable": "/home/aniketdatar/.nvm/versions/node/v22.22.1/bin/npx",
+      "runtimeArgs": ["expo", "start", "--web", "--port", "8081"],
+      "cwd": "app",
+      "port": 8081
     }
   ]
 }
