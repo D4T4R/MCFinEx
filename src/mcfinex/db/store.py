@@ -513,6 +513,33 @@ class Store:
             )
         ]
 
+    def all_quarterly_history(
+        self, labels: Sequence[str],
+    ) -> dict[str, dict[str, list[tuple[str, float]]]]:
+        """:meth:`quarterly_history` for every company at once, oldest first.
+
+        Publishing needs trends for the whole shortlist, and asking per company
+        per label is the N+1 that :meth:`all_series` exists to avoid -- roughly
+        five thousand round-trips, which is minutes against a hosted database
+        and nothing at all against a local file. Periods are kept, so this
+        cannot simply reuse ``all_series``, which returns values only.
+        """
+        placeholders = ", ".join("?" for _ in labels)
+        out: dict[str, dict[str, list[tuple[str, float]]]] = {}
+        if not labels:
+            return out
+        rows = self.conn.execute(
+            "SELECT ticker, label, period, value FROM financials "
+            f"WHERE statement = 'quarters' AND label IN ({placeholders}) "
+            "AND value IS NOT NULL ORDER BY ticker, label, period",
+            tuple(labels),
+        )
+        for row in rows:
+            out.setdefault(row["ticker"], {}).setdefault(row["label"], []).append(
+                (row["period"], row["value"])
+            )
+        return out
+
     def quarterly_history(self, ticker: str, label: str) -> list[tuple[str, float]]:
         """One quarterly line item oldest first, for trend analysis."""
         return [

@@ -17,6 +17,10 @@ data/
 .env
 .idea/
 .vscode/
+.claude-flow/
+
+# Built by `mcfinex publish`; the deployed copy is generated in CI.
+site/
 
 # Holds a live database credential.
 .streamlit/secrets.toml

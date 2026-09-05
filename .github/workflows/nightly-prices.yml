@@ -20,6 +20,13 @@ concurrency:
   group: nightly-prices
   cancel-in-progress: false
 
+# Read the repo, publish the screen to Pages. `id-token` is what
+# actions/deploy-pages uses to prove the deployment came from this workflow.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
 jobs:
   refresh:
     runs-on: ubuntu-latest
@@ -57,3 +64,41 @@ jobs:
 
       - name: Show what the app will serve
         run: mcfinex screen -n 10 --min-buys 8
+
+      # Published from this job rather than a scheduled one of its own. A
+      # separate workflow would have to guess how long the refresh takes, and
+      # GitHub's scheduler has been observed lagging by three hours here -- so
+      # a fixed offset would eventually publish yesterday's prices as today's.
+      # Running in the same job means it can only ever see the data it just
+      # wrote. Enrichment (22:00 UTC) is picked up by the next night's run.
+      - name: Build the static site the phone app reads
+        run: mcfinex publish --out site
+
+      - name: Check the site is not empty
+        # `publish` already refuses an empty screen, but the artifact upload
+        # would happily deploy a directory that failed to fill for any other
+        # reason, and a broken deploy is silent: the app just sees old data.
+        run: |
+          companies=$(ls site/company | wc -l)
+          echo "index.json: $(wc -c < site/index.json) bytes, $companies companies"
+          if [ "$companies" -lt 100 ]; then
+            echo "only $companies company files; refusing to deploy" >&2
+            exit 1
+          fi
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  # Split out because deploy-pages needs the github-pages environment, and
+  # granting that to the job holding the database credential is more access
+  # than either step needs.
+  deploy:
+    needs: refresh
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

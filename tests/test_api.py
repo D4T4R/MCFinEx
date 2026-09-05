@@ -61,6 +61,44 @@ class TestHealth:
         assert body["status"] == "ok"
         assert body["companies"] == 2
 
+    def test_it_does_not_print_the_password(self, client):
+        # /health is the endpoint most likely to be pasted somewhere public.
+        assert "***" not in client.get("/health").json()["database"]  # a file path
+
+
+class TestHostedDatabase:
+    """The API used to assume db_path was a Path.
+
+    ``_rows()`` called ``path.stat()`` and ``health()`` called ``path.exists()``,
+    so every endpoint raised AttributeError the moment MCFINEX_PG was set -- a
+    DSN is a string. It had only ever been run against SQLite, which is why
+    nothing caught it.
+    """
+
+    @pytest.fixture
+    def hosted(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("MCFINEX_PG", "postgresql://u:hunter2@example.invalid:5432/db")
+        monkeypatch.setenv("MCFINEX_DATA_DIR", str(tmp_path))
+        import mcfinex.api as api
+        api._screened.cache_clear()
+        return api
+
+    def test_a_dsn_is_treated_as_a_database_not_a_missing_file(self, hosted):
+        from mcfinex.config import Settings, database_ready
+        assert database_ready(Settings.from_env())
+
+    def test_endpoints_reach_the_driver_instead_of_dying_on_the_type(self, hosted):
+        # An unresolvable host, so this fails at connect time. The point is
+        # which error: a driver error means the code got that far.
+        with pytest.raises(Exception) as caught:
+            hosted.health()
+        assert not isinstance(caught.value, AttributeError)
+
+    def test_a_connection_failure_does_not_leak_the_password(self, hosted):
+        with pytest.raises(Exception) as caught:
+            hosted.summary()
+        assert "hunter2" not in str(caught.value)
+
 
 class TestPicks:
     def test_returns_ranked_picks(self, client):

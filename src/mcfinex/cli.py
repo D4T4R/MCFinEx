@@ -87,6 +87,11 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--csv", help="write the full screen to this CSV instead of printing")
     p.set_defaults(handler=cmd_screen)
 
+    p = sub.add_parser("publish", help="write the screen as a static JSON site")
+    p.add_argument("-o", "--out", default="site",
+                   help="directory to write index.json and company/ into")
+    p.set_defaults(handler=cmd_publish)
+
     p = sub.add_parser("prices", help="refresh closing prices from the NSE bhavcopy")
     p.add_argument("--no-revalue", action="store_true",
                    help="update prices without recomputing stored valuations")
@@ -317,6 +322,27 @@ def cmd_screen(args) -> int:
         print(f"{s.ticker:<12} {str(s.name)[:32]:<32} {s.buy_count:>3} {s.sell_count:>4} "
               f"{price:>10} {target:>10} {upside:>8}")
     print(f"\n{len(rows)} companies screened. `mcfinex-dashboard` for the full view.")
+    return 0
+
+
+def cmd_publish(args) -> int:
+    """Build the JSON the phone app reads.
+
+    Deliberately fails rather than publishing an empty screen: the app has no
+    way to tell "nothing qualified today" from "the database was unreachable",
+    and overwriting a good site with an empty one is worse than not publishing.
+    """
+    from pathlib import Path
+
+    from .publish import write_site
+
+    with Store(args.db) as store:
+        rows = screen_all(store)
+        if not rows:
+            log.error("nothing screened; refusing to publish an empty site")
+            return 1
+        written = write_site(store, Path(args.out), rows)
+    log.info("published %s", written.summary)
     return 0
 
 
