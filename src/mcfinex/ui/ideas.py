@@ -22,6 +22,7 @@ from mcfinex.disclaimer import FULL as _FULL_DISCLAIMER, SHORT as _SHORT_DISCLAI
 from mcfinex.db.store import Store
 from mcfinex.picks import Tier
 from mcfinex.report import screen_all
+from mcfinex.ui import NO_DATA, freshness
 
 TIER_HELP = {
     Tier.HIGH_CONVICTION: (
@@ -67,15 +68,14 @@ def _cache_key(settings) -> str:
 def main() -> None:
     settings = Settings.from_env()
     if not _database_ready(settings):
-        st.error(f"No database at {settings.db_path}. Run `mcfinex init` then `mcfinex scrape`.")
+        st.error(NO_DATA)
         return
 
     all_picks, heat, universe = load(str(settings.db_path), _cache_key(settings))
+    with Store(str(settings.db_path)) as store:
+        as_of = freshness(store)
     st.title("Ideas")
-    st.caption(
-        "Ranked by corroboration, not by size of upside. Screened from stored data — "
-        "run `mcfinex prices` to refresh, then reload."
-    )
+    st.caption("Ranked by corroboration, not by size of upside. " + as_of)
     # Above the signals, not buried under them: a reader who scrolls straight to
     # the cards should still have met the caveat.
     st.warning(_SHORT_DISCLAIMER, icon=":material/info:")

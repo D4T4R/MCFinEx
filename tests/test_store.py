@@ -512,3 +512,48 @@ class TestUnenrichedBacklog:
 
     def test_nothing_left_is_empty_not_an_error(self, store):
         assert store.unenriched_tickers(limit=10) == []
+
+
+class TestFreshnessCaption:
+    """What the pages tell a reader about how current the data is.
+
+    They used to print `mcfinex prices`, which only the owner can run and only
+    against their own machine -- on the public site that is an instruction
+    nobody reading it can follow.
+    """
+
+    def test_reports_both_dates_readably(self, store):
+        from mcfinex.ui import freshness
+
+        store.upsert_company("AAA", {"last_updated": "2026-08-21"})
+        store.update_prices({"AAA": 10.0}, "2026-09-04")
+        assert freshness(store) == (
+            "Prices as of 4 Sep 2026 · fundamentals to 21 Aug 2026 · "
+            "prices refresh nightly"
+        )
+
+    def test_an_empty_database_says_something_sane(self, store):
+        from mcfinex.ui import freshness
+
+        assert freshness(store) == "Screened from stored data."
+
+    def test_a_price_with_no_scrape_still_reads(self, store):
+        from mcfinex.ui import freshness
+
+        store.upsert_company("AAA", {})
+        store.update_prices({"AAA": 10.0}, "2026-09-04")
+        assert freshness(store).startswith("Prices as of 4 Sep 2026")
+        assert "fundamentals" not in freshness(store)
+
+    def test_a_junk_date_is_not_rendered(self, store):
+        # Never surface a raw stored value that is not a date.
+        from mcfinex.ui import freshness
+
+        store.upsert_company("AAA", {"last_updated": "not-a-date"})
+        assert freshness(store) == "Screened from stored data."
+
+    def test_no_cli_command_is_suggested_to_visitors(self, store):
+        from mcfinex.ui import freshness
+
+        store.upsert_company("AAA", {"last_updated": "2026-08-21"})
+        assert "mcfinex" not in freshness(store)

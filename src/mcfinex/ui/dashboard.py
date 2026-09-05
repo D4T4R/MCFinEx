@@ -21,6 +21,7 @@ from mcfinex.db.store import Store
 from mcfinex.enrich import enrich
 from mcfinex.picks import Tier
 from mcfinex.report import screen_all
+from mcfinex.ui import NO_DATA, freshness
 from mcfinex.sources.screener import ScreenerError
 from mcfinex.trends import TREND_LINES, analyse
 from mcfinex.screening import Verdict
@@ -93,16 +94,18 @@ def main() -> None:
     settings = Settings.from_env()
     db_path = str(settings.db_path)
     if not _database_ready(settings):
-        st.error(f"No database at {db_path}. Run `mcfinex init` then `mcfinex scrape`.")
+        st.error(NO_DATA)
         return
 
     with Store(db_path) as probe:
         revision = probe.revision()
+        as_of = freshness(probe)
     frame, detail = load(db_path, revision)
     if frame.empty:
-        st.warning("Nothing scraped yet. Run `mcfinex scrape --from-template`.")
+        st.warning(NO_DATA)
         return
 
+    st.caption(as_of)
     filtered, columns, measures = _sidebar(frame)
     _overview(frame, filtered)
     picked = _table(filtered, columns)
