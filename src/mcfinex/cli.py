@@ -63,8 +63,11 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--limit", type=int, help="stop after N companies")
     p.set_defaults(handler=cmd_scrape)
 
-    p = sub.add_parser("enrich", help="fetch balance-sheet detail for named companies")
-    p.add_argument("tickers", nargs="+", help="companies to enrich")
+    p = sub.add_parser("enrich", help="fetch balance-sheet detail for companies")
+    p.add_argument("tickers", nargs="*", help="companies to enrich")
+    p.add_argument("--missing", type=int, metavar="N",
+                   help="instead of named tickers, work through up to N "
+                        "companies that have no schedule detail yet")
     p.set_defaults(handler=cmd_enrich)
 
     p = sub.add_parser("push", help="copy the local database to a hosted one")
@@ -194,25 +197,44 @@ def cmd_enrich(args) -> int:
     would roughly double a full-universe run. Enriching re-values the company,
     since cash changes its enterprise value and every target derived from it.
     """
+    if not args.tickers and args.missing is None:
+        log.error("name some tickers, or use --missing N to work through the backlog")
+        return 2
+
     session = requests.Session()
     pace = screener.Throttle(settings.request_delay)
-    done = 0
+    done = failed = empty = 0
     with Store(args.db) as store:
         store.create_schema()
-        for ticker in (t.upper() for t in args.tickers):
+        if args.missing is not None:
+            targets = store.unenriched_tickers(limit=args.missing)
+            outstanding = len(store.unenriched_tickers())
+            log.info("%d companies still lack schedule detail; taking %d",
+                     outstanding, len(targets))
+        else:
+            targets = [t.upper() for t in args.tickers]
+
+        for ticker in targets:
             try:
                 result = enrich(store, ticker, session=session, throttle=pace)
             except (screener.ScreenerError, requests.RequestException) as exc:
+                # One bad company must not end the batch: the run is hours long
+                # and the work already committed would be thrown away with it.
+                failed += 1
                 log.warning("%s failed: %s", ticker, exc)
                 continue
             if not result.found_anything:
+                # Genuinely has no schedules published -- counted separately so
+                # it is not mistaken for a fetch that went wrong.
+                empty += 1
                 log.warning("%s: no schedules available", ticker)
                 continue
             done += 1
             log.info("%s  cash=%s current assets=%s current liabilities=%s%s",
                      ticker, result.cash, result.current_assets,
                      result.current_liabilities, "  (revalued)" if result.revalued else "")
-    log.info("enriched %d companies", done)
+    log.info("enriched %d companies (%d had none published, %d failed)",
+             done, empty, failed)
     return 0
 
 

@@ -287,6 +287,36 @@ class Store:
             )
         return len(payload)
 
+    def unenriched_tickers(self, limit: int | None = None) -> list[str]:
+        """Scraped companies with no schedule detail yet, oldest scrape first.
+
+        One query rather than `has_schedule` per company: the caller is picking
+        a batch out of ~2,500, and asking individually would be 2,500 round
+        trips to a hosted database before a single page is fetched.
+
+        Ordered by ticker so the backlog drains predictably across runs.
+        Companies only seeded from the bhavcopy are excluded: there is nothing
+        to enrich until they have been scraped.
+
+        A company screener publishes no schedules for never gains rows, so it is
+        re-offered on every run. That is deliberate -- schedules do appear later,
+        and a company is not permanently barren -- but it means the tail of the
+        backlog is a fixed retry cost of four requests each. `cmd_enrich` counts
+        those separately so the size of that tail is visible.
+        """
+        sql = (
+            "SELECT c.ticker FROM companies c "
+            "WHERE c.last_updated IS NOT NULL AND NOT EXISTS ("
+            "  SELECT 1 FROM financials f "
+            "  WHERE f.ticker = c.ticker AND f.statement = 'schedule') "
+            "ORDER BY c.ticker"
+        )
+        params: list[Any] = []
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(limit)
+        return [r["ticker"] for r in self.conn.execute(sql, params)]
+
     def has_schedule(self, ticker: str) -> bool:
         row = self.conn.execute(
             "SELECT 1 FROM financials WHERE ticker = ? AND statement = 'schedule' LIMIT 1",

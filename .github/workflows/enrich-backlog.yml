@@ -1,0 +1,64 @@
+name: Enrich backlog
+
+# Balance-sheet schedules, a batch at a time.
+#
+# Enrichment expands the collapsed "Other Assets"/"Other Liabilities"/
+# "Borrowings" rows, which is what supplies the current ratio and lets
+# enterprise value net off cash. It was never wired into a job, so only 133 of
+# 2,544 companies had it -- and because an unenriched company is scored on six
+# fundamentals instead of seven, the high-conviction tier had become 100%
+# enriched names while every other tier sat near 1%. The tier was partly
+# selecting for having been enriched rather than for quality.
+#
+# Four requests per company at one second apart, so the whole backlog is roughly
+# three hours of requests to a free service. Deliberately chipped away in
+# batches rather than done in one run: it is polite to screener, it keeps each
+# job well inside its timeout, and progress is committed per company, so a run
+# that dies loses only the company in flight.
+#
+# Runs well clear of "Nightly prices" -- both write to the same database, and
+# GitHub's scheduler can lag by hours.
+on:
+  schedule:
+    - cron: "0 22 * * *"
+  workflow_dispatch:
+    inputs:
+      batch:
+        description: "How many companies to enrich in this run"
+        required: false
+        default: "400"
+
+concurrency:
+  group: enrich-backlog
+  cancel-in-progress: false
+
+jobs:
+  enrich:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      MCFINEX_PG: ${{ secrets.MCFINEX_PG }}
+      BATCH: ${{ github.event.inputs.batch || '400' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: pip install -e ".[postgres]"
+
+      - name: Check the secret is present
+        run: |
+          if [ -z "$MCFINEX_PG" ]; then
+            echo "MCFINEX_PG is not set. Add it under" \
+                 "Settings > Secrets and variables > Actions." >&2
+            exit 1
+          fi
+
+      # Logs how many are still outstanding before it starts, so the backlog
+      # can be watched shrinking without opening the database.
+      - name: Enrich a batch
+        run: mcfinex enrich --missing "$BATCH"

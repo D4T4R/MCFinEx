@@ -469,3 +469,46 @@ class TestBulkUpsert:
     def test_a_missing_value_becomes_null(self, store):
         store.upsert_companies([("ACME", {})], ("current_price",))
         assert store.company("ACME")["current_price"] is None
+
+
+class TestUnenrichedBacklog:
+    """Picking the next batch to enrich, in one query rather than 2,500."""
+
+    def scraped(self, store, *tickers):
+        for t in tickers:
+            store.upsert_company(t, {"last_updated": "2026-01-01"})
+
+    def test_lists_scraped_companies_without_schedules(self, store):
+        self.scraped(store, "AAA", "BBB")
+        assert store.unenriched_tickers() == ["AAA", "BBB"]
+
+    def test_enriched_companies_drop_out(self, store):
+        self.scraped(store, "AAA", "BBB")
+        store.replace_schedule("AAA", [("2026-03-31", "schedule", "Cash Equivalents", 5.0)])
+        assert store.unenriched_tickers() == ["BBB"]
+
+    def test_seeded_but_never_scraped_are_excluded(self, store):
+        # A bhavcopy listing has no financials yet, so there is nothing to expand.
+        store.upsert_company("SEEDED", {"isin": "IN123"})
+        self.scraped(store, "DONE")
+        assert store.unenriched_tickers() == ["DONE"]
+
+    def test_other_statements_do_not_count_as_enriched(self, store):
+        # Only 'schedule' rows mean enrichment; a normal scrape must not qualify.
+        self.scraped(store, "AAA")
+        store.replace_financials("AAA", [("2026-03-31", "balance-sheet", "Borrowings", 1.0)])
+        assert store.unenriched_tickers() == ["AAA"]
+
+    def test_limit_takes_a_batch(self, store):
+        self.scraped(store, "AAA", "BBB", "CCC")
+        assert store.unenriched_tickers(limit=2) == ["AAA", "BBB"]
+
+    def test_the_backlog_drains_across_runs(self, store):
+        self.scraped(store, "AAA", "BBB", "CCC")
+        first = store.unenriched_tickers(limit=2)
+        for t in first:
+            store.replace_schedule(t, [("2026-03-31", "schedule", "Cash Equivalents", 1.0)])
+        assert store.unenriched_tickers(limit=2) == ["CCC"]
+
+    def test_nothing_left_is_empty_not_an_error(self, store):
+        assert store.unenriched_tickers(limit=10) == []
