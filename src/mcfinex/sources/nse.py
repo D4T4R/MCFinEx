@@ -13,11 +13,15 @@ from __future__ import annotations
 
 import csv
 import io
+import logging
+import time
 import zipfile
 from dataclasses import dataclass
 from datetime import date, timedelta
 
 import requests
+
+log = logging.getLogger(__name__)
 
 BHAVCOPY_URL = (
     "https://nsearchives.nseindia.com/content/cm/"
@@ -51,20 +55,68 @@ class Listing:
     close: float | None
 
 
+#: Transient failures worth another go: nsearchives is intermittently slow, and
+#: a single timeout used to abort the whole walk-back.
+RETRY_ATTEMPTS = 3
+RETRY_BACKOFF = 2.0
+
+
 def fetch_bhavcopy(day: date, *, session: requests.Session | None = None,
-                   timeout: float = 30.0) -> bytes | None:
-    """Download one day's bhavcopy, or ``None`` if NSE has nothing for that day."""
+                   timeout: float = 30.0, attempts: int = RETRY_ATTEMPTS) -> bytes | None:
+    """Download one day's bhavcopy, or ``None`` if NSE has nothing for that day.
+
+    A 404 is an answer -- weekend, holiday, or not published yet -- and is
+    reported as ``None``. A timeout or a 5xx is not an answer, so it is retried
+    before giving up: nsearchives regularly takes longer than 30s under load,
+    and a single slow response should not decide the outcome of the run.
+    """
     sess = session or requests.Session()
     url = BHAVCOPY_URL.format(yyyymmdd=day.strftime("%Y%m%d"))
-    resp = sess.get(
-        url,
-        headers={"User-Agent": USER_AGENT, "Referer": "https://www.nseindia.com/"},
-        timeout=timeout,
-    )
-    if resp.status_code == 404:
-        return None  # weekend, holiday, or not published yet
-    resp.raise_for_status()
-    return resp.content
+    for attempt in range(1, attempts + 1):
+        try:
+            resp = sess.get(
+                url,
+                headers={"User-Agent": USER_AGENT, "Referer": "https://www.nseindia.com/"},
+                timeout=timeout,
+            )
+            if resp.status_code == 404:
+                return None
+            if resp.status_code >= 500:
+                raise requests.HTTPError(f"{resp.status_code} from {url}", response=resp)
+            resp.raise_for_status()
+            return resp.content
+        except (requests.Timeout, requests.ConnectionError, requests.HTTPError) as exc:
+            # 4xx other than 404 is a real answer -- a changed URL, say -- and
+            # retrying it just wastes the run.
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            if status is not None and status < 500:
+                raise
+            if attempt == attempts:
+                raise
+            pause = RETRY_BACKOFF ** (attempt - 1)
+            log.warning("bhavcopy %s attempt %d/%d failed (%s); retrying in %.0fs",
+                        day, attempt, attempts, type(exc).__name__, pause)
+            time.sleep(pause)
+    return None  # unreachable; every path above returns or raises
+
+
+def _fetch_or_skip(day: date, sess: requests.Session) -> bytes | None:
+    """Fetch a day, treating a persistent network failure as a missing session.
+
+    The walk-back exists precisely so one unusable day does not sink the run,
+    but it only ever handled 404s -- a timeout raised straight out of the loop.
+    On a Saturday that meant the job could die requesting a file it did not
+    need, before reaching the Friday one it did.
+
+    Deliberately not silent: the day is logged and skipped, and the callers
+    still raise if *no* session could be read at all.
+    """
+    try:
+        return fetch_bhavcopy(day, session=sess)
+    except requests.RequestException as exc:
+        log.warning("bhavcopy %s unavailable after retries (%s); skipping that session",
+                    day, exc)
+        return None
 
 
 def latest_bhavcopy(*, on: date | None = None, max_lookback: int = 10,
@@ -75,10 +127,11 @@ def latest_bhavcopy(*, on: date | None = None, max_lookback: int = 10,
     ``while (!bGotFile)`` with no limit, so a network outage or a renamed URL
     spun forever instead of failing.
     """
+    sess = session or requests.Session()
     start = on or date.today()
     for offset in range(max_lookback + 1):
         day = start - timedelta(days=offset)
-        payload = fetch_bhavcopy(day, session=session)
+        payload = _fetch_or_skip(day, sess)
         if payload is not None:
             return day, payload
     raise NseError(
@@ -106,7 +159,7 @@ def universe(*, days: int = 7, on: date | None = None,
         if len(sessions) >= days:
             break
         day = start - timedelta(days=offset)
-        payload = fetch_bhavcopy(day, session=sess)
+        payload = _fetch_or_skip(day, sess)
         if payload is None:
             continue
         sessions.append(day)
