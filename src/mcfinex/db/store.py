@@ -8,6 +8,7 @@ anything else in the page text went straight into the database as SQL.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import date
 from pathlib import Path
@@ -642,6 +643,64 @@ class Store:
                 rows,
             )
         return len(rows)
+
+    # ---------------------------------------------------------- alert state
+
+    def alert_state(self) -> dict[str, dict[str, Any]]:
+        """What every company looked like when alerts were last delivered.
+
+        Returned as plain dicts rather than :class:`mcfinex.alerts.Snapshot`, so
+        persistence does not depend on the rule engine and the rule engine stays
+        importable without a database.
+        """
+        out: dict[str, dict[str, Any]] = {}
+        for row in self.conn.execute(
+            "SELECT ticker, tier, actionable, upside_pct, verdicts FROM alert_state"
+        ):
+            try:
+                verdicts = json.loads(row["verdicts"] or "{}")
+            except json.JSONDecodeError:
+                # A row we cannot read is a row whose history is gone. Treating
+                # it as absent means the company is seen as new and its alerts
+                # do not fire, which is the quiet failure; the loud one would be
+                # crashing the nightly job over one malformed column.
+                verdicts = {}
+            out[row["ticker"]] = {
+                "tier": row["tier"],
+                "actionable": bool(row["actionable"]),
+                "upside_pct": row["upside_pct"],
+                "verdicts": verdicts if isinstance(verdicts, dict) else {},
+            }
+        return out
+
+    def save_alert_state(self, states: Mapping[str, Mapping[str, Any]],
+                         when: date | str | None = None) -> int:
+        """Record what was just delivered, so the next run compares against it.
+
+        Called only after a successful send. Advancing this on a failed delivery
+        is how an alert is lost for good: the transition is consumed, and the
+        next run sees no change to report.
+        """
+        stamp = _scalar(when or date.today())
+        payload = [
+            (ticker, s.get("tier"), int(bool(s.get("actionable"))),
+             s.get("upside_pct"), json.dumps(s.get("verdicts") or {},
+                                             separators=(",", ":")), stamp)
+            for ticker, s in states.items()
+        ]
+        if not payload:
+            return 0
+        with self.conn:
+            self.conn.executemany(
+                "INSERT INTO alert_state "
+                "(ticker, tier, actionable, upside_pct, verdicts, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(ticker) DO UPDATE SET tier = excluded.tier, "
+                "actionable = excluded.actionable, upside_pct = excluded.upside_pct, "
+                "verdicts = excluded.verdicts, updated_at = excluded.updated_at",
+                payload,
+            )
+        return len(payload)
 
 
 def _scalar(value: Any) -> Any:

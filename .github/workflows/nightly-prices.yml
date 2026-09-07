@@ -102,3 +102,43 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@v4
+
+  # After the deploy, not alongside it. A notification is an invitation to open
+  # the company page, so the site it opens should already be the one the alert
+  # was computed from.
+  #
+  # Holds the database credential -- it re-screens to compare against the stored
+  # state -- but not `pages` or `id-token`, which it has no use for.
+  notify:
+    needs: deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      MCFINEX_PG: ${{ secrets.MCFINEX_PG }}
+      MCFINEX_FCM: ${{ secrets.MCFINEX_FCM }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -e ".[postgres,notify]"
+
+      - name: Send what changed
+        # Absent rather than failed: push is the last thing to be set up, and a
+        # red nightly job every night until Firebase exists would train whoever
+        # reads it to ignore the red. The command itself is not silent -- it
+        # refuses to advance the alert state if a send fails, so nothing is
+        # quietly dropped once this is switched on.
+        run: |
+          if [ -z "$MCFINEX_FCM" ]; then
+            echo "MCFINEX_FCM is not set, so no push was sent. Add the Firebase" \
+                 "service account JSON under Settings > Secrets and variables >" \
+                 "Actions to turn alerts on."
+            exit 0
+          fi
+          mcfinex notify

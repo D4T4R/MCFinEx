@@ -8,6 +8,8 @@ path is the connection itself.
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from mcfinex.db.dialect import POSTGRES, SQLITE, for_dsn, split_statements
@@ -109,8 +111,14 @@ class TestSplitStatements:
     def test_every_statement_from_the_real_schema_is_executable(self):
         from mcfinex.db.store import SCHEMA_PATH
 
-        statements = split_statements(SCHEMA_PATH.read_text())
-        assert len(statements) == 5
+        script = SCHEMA_PATH.read_text()
+        statements = split_statements(script)
+        # Counted from the script rather than hardcoded: a literal here fails on
+        # every schema addition, which trains you to bump the number without
+        # reading what actually broke. What matters is that the split produced
+        # one statement per CREATE -- not a single run-on, and not a fragment
+        # sheared off by a semicolon inside a comment.
+        assert len(statements) == len(re.findall(r"(?mi)^CREATE\b", script))
         for statement in statements:
             assert statement.upper().startswith(("CREATE TABLE", "CREATE INDEX")), statement
 

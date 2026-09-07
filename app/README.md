@@ -46,6 +46,13 @@ Everything degrades to a no-op when Firebase is absent, so the app runs on web
 and in a build with no `google-services.json` — the Alerts screen says so rather
 than offering switches that quietly do nothing.
 
+Topics are a contract in two halves. `TOPICS` in `src/notifications.ts` names
+what the phone subscribes to; the constants in `src/mcfinex/notify.py` name what
+the sender publishes to. A rename on one side reaches nobody, and the app cannot
+tell the difference between "no alerts tonight" and "subscribed to a name that
+does not exist" — so `tests/test_notify.py` reads this file and fails if they
+drift.
+
 To turn it on:
 
 1. Create a Firebase project and add an Android app with package
@@ -58,6 +65,23 @@ To turn it on:
    eas secret:create --scope project --name GOOGLE_SERVICES_JSON \
      --type file --value ./google-services.json
    ```
+4. For the sending half, Project settings → Service accounts → Generate new
+   private key, and put the whole JSON in the `MCFINEX_FCM` repository secret
+   (Settings → Secrets and variables → Actions). This one **is** a secret: it
+   signs as your project. Until it exists the nightly job skips the send and
+   stays green rather than failing every night.
+
+Then check what a night would do without sending anything:
+
+```bash
+mcfinex notify --dry-run     # prints each message and its audience
+```
+
+The first real run is deliberately silent. It records what every company looks
+like now, so that later runs report what *changed* — otherwise night one pushes
+every company that happens to be sitting below its entry price. State advances
+only when every message was accepted, so a failed send retries tomorrow instead
+of being consumed.
 
 ## Build an APK
 

@@ -54,6 +54,7 @@ mcfinex show RELIANCE                 # print stored values and valuations
 mcfinex screen --min-buys 6           # rank by BUY signals
 mcfinex screen --csv screen.csv       # or dump the whole screen
 mcfinex publish --out site            # static JSON the phone app reads
+mcfinex notify --dry-run              # what tonight would push to the phone
 mcfinex-dashboard                     # two-page Streamlit UI on :8501
 mcfinex-api                           # read-only JSON API on :8000
 mcfinex export                        # optional: fill a copy of the workbook
@@ -214,6 +215,31 @@ refresh takes, and GitHub's scheduler has lagged three hours here.
 
 The API and the published files share their serialisers (`publish.py`), so the
 two cannot drift into disagreeing about a field.
+
+## Alerts
+
+`mcfinex notify` runs after the deploy and pushes what *changed* — a rule that
+matched on state alone would resend the same six hundred companies every night
+until the reader muted it. `alerts.py` holds the rules and stays pure; `notify.py`
+puts them on the wire.
+
+Delivery is by FCM **topic**, so the phone subscribes itself. There is no device
+table, no write endpoint and no record of who runs the app — and no way to send
+to one person, which is the cost of that.
+
+Three properties are load-bearing, and each has a test that fails without it:
+
+- The **first run is silent**. It records a baseline instead, or night one pushes
+  every company already sitting below its entry price.
+- **State advances only on a successful send.** Advancing it after a failure
+  consumes the transition, so the alert would be lost rather than delayed.
+- **One company, one notification.** The triggers are correlated — a company that
+  falls to its entry price has usually just entered the top tier too — so each
+  push goes to a *condition* covering everyone with a reason to hear it, rather
+  than three messages to overlapping topics.
+
+Set-up is `MCFINEX_FCM` (a Firebase service account JSON) as a repository secret;
+see `app/README.md`. Without it the nightly job skips the send and stays green.
 
 ## Workbook column map
 

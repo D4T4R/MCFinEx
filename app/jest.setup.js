@@ -11,6 +11,13 @@
 // is in a test environment, and every async load in the app sets state.
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
+// The library waits one second for an async assertion. That is ample once
+// Babel has a warm transform cache and not always enough without one, so the
+// suite passed here and failed the first time it ran anywhere else -- and a
+// suite that only fails on a cold cache is a suite that only fails in CI.
+// Reproduce the old behaviour with `npx jest --no-cache`.
+require('@testing-library/react-native').configure({ asyncUtilTimeout: 5000 });
+
 jest.mock('@react-native-async-storage/async-storage', () =>
   require('@react-native-async-storage/async-storage/jest/async-storage-mock'),
 );
