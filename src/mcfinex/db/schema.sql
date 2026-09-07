@@ -72,3 +72,23 @@ CREATE TABLE IF NOT EXISTS result_calendar (
     financial_quarter TEXT NOT NULL,
     PRIMARY KEY (ticker, result_date, financial_quarter)
 );
+
+-- What each company looked like the last time alerts were delivered. An alert
+-- fires on a transition, so without this every run resends the same names until
+-- the reader mutes them.
+--
+-- No foreign key to companies: this is the record of what was already said, and
+-- deleting a company should not silently make its alerts eligible to fire again
+-- if it is ever re-added.
+--
+-- `verdicts` is a JSON object rather than a column per signal. The set of
+-- signals is not fixed, and a column each would need a migration every time one
+-- is added -- to store a value nothing queries on.
+CREATE TABLE IF NOT EXISTS alert_state (
+    ticker      TEXT PRIMARY KEY,
+    tier        TEXT,
+    actionable  INTEGER NOT NULL DEFAULT 0,
+    upside_pct  REAL,
+    verdicts    TEXT NOT NULL DEFAULT '{}',
+    updated_at  TEXT NOT NULL
+);

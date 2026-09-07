@@ -21,6 +21,10 @@ dev = ["pytest>=8.0"]
 ui = ["streamlit>=1.40", "pandas>=2.0"]
 api = ["fastapi>=0.115", "uvicorn[standard]>=0.30"]
 postgres = ["psycopg[binary]>=3.1"]
+# FCM HTTP v1 is OAuth2 only -- the legacy server key was switched off in 2024
+# -- so sending push needs something that can mint a token from a service
+# account. Kept out of the base install: only the nightly job ever sends.
+notify = ["google-auth>=2.27"]
 
 [project.scripts]
 mcfinex = "mcfinex.cli:main"

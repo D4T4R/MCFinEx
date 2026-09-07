@@ -53,6 +53,8 @@ mcfinex enrich RELIANCE TCS           # pull balance-sheet detail for named comp
 mcfinex show RELIANCE                 # print stored values and valuations
 mcfinex screen --min-buys 6           # rank by BUY signals
 mcfinex screen --csv screen.csv       # or dump the whole screen
+mcfinex publish --out site            # static JSON the phone app reads
+mcfinex notify --dry-run              # what tonight would push to the phone
 mcfinex-dashboard                     # two-page Streamlit UI on :8501
 mcfinex-api                           # read-only JSON API on :8000
 mcfinex export                        # optional: fill a copy of the workbook
@@ -185,6 +187,59 @@ The landing page calls the Python layer directly rather than over HTTP, so the
 Streamlit route needs only one process. The API exists so a React front end can
 replace `Ideas` without any screening logic moving: `screening.py`, `picks.py`
 and `trends.py` import no framework, and a test asserts they never will.
+
+## Published data
+
+`mcfinex publish` writes the same screening as static JSON, which is what the
+phone app reads. The data changes once a night and the audience is a handful of
+people, so a hosted API would be a process to keep alive and a cold start to
+wait through in exchange for answering the same question all day.
+
+| File | Holds | Over the wire |
+|---|---|---|
+| `index.json` | counts, sector heat, every ranked pick | ~99 KB gzipped |
+| `company/{id}.json` | signals, targets, eight-quarter trends | ~1.4 KB gzipped |
+
+`id` is the ticker with `&` mapped to `_` (`M&M` → `M_M.json`), and travels with
+each pick so a client never reimplements the rule. `_` never occurs in an NSE
+ticker, which makes the mapping injective; `publish` fails rather than deploy if
+two tickers ever collide.
+
+Every payload carries `"schema"`. The app is sideloaded, so no update can be
+forced on anyone — an old build has to be able to recognise a payload it cannot
+read and say so, rather than display nonsense.
+
+Deployed to GitHub Pages at the end of the nightly refresh, in the same job that
+wrote the prices. A separate scheduled workflow would have to guess how long the
+refresh takes, and GitHub's scheduler has lagged three hours here.
+
+The API and the published files share their serialisers (`publish.py`), so the
+two cannot drift into disagreeing about a field.
+
+## Alerts
+
+`mcfinex notify` runs after the deploy and pushes what *changed* — a rule that
+matched on state alone would resend the same six hundred companies every night
+until the reader muted it. `alerts.py` holds the rules and stays pure; `notify.py`
+puts them on the wire.
+
+Delivery is by FCM **topic**, so the phone subscribes itself. There is no device
+table, no write endpoint and no record of who runs the app — and no way to send
+to one person, which is the cost of that.
+
+Three properties are load-bearing, and each has a test that fails without it:
+
+- The **first run is silent**. It records a baseline instead, or night one pushes
+  every company already sitting below its entry price.
+- **State advances only on a successful send.** Advancing it after a failure
+  consumes the transition, so the alert would be lost rather than delayed.
+- **One company, one notification.** The triggers are correlated — a company that
+  falls to its entry price has usually just entered the top tier too — so each
+  push goes to a *condition* covering everyone with a reason to hear it, rather
+  than three messages to overlapping topics.
+
+Set-up is `MCFINEX_FCM` (a Firebase service account JSON) as a repository secret;
+see `app/README.md`. Without it the nightly job skips the send and stays green.
 
 ## Workbook column map
 
@@ -340,7 +395,9 @@ src/mcfinex/
   picks.py           tiering, ranking and sector heat (pure)
   trends.py          eight-quarter analysis and projection (pure)
   report.py          store -> screening glue, sector median P/E
+  alerts.py          transition-only alert rules (pure)
   api.py             read-only FastAPI over the database
+  publish.py         static JSON site; shares its serialisers with api.py
   ui/app.py          page navigation
   ui/ideas.py        landing page: shortlist as cards
   ui/dashboard.py    detailed screen: table, search, drill-down

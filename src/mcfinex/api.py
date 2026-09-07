@@ -21,11 +21,12 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from . import picks as picks_module
-from .config import Settings
+from .config import Settings, database_ready, redact
 from .db.store import Store
 from .disclaimer import FULL as FULL_DISCLAIMER, SHORT as SHORT_DISCLAIMER
+from .publish import pick_payload, signal_payload, trend_payload
 from .report import screen_all
-from .trends import TREND_LINES, analyse
+from .trends import TREND_LINES
 
 app = FastAPI(
     title="MCFinEx",
@@ -51,49 +52,35 @@ def _store() -> Store:
 def _screened(stamp: str) -> list:
     """Screen the whole universe once per underlying database change.
 
-    Keyed on the database's modification time so an ordinary request never pays
+    Keyed on a token from the rows themselves so an ordinary request never pays
     for a re-screen, but a scrape or price refresh invalidates it without a
-    restart.
+    restart. This used to key on the file's modification time, which meant every
+    endpoint raised ``AttributeError`` the moment MCFINEX_PG was set: a DSN is a
+    string, and a string has no ``stat()``. The API had only ever been exercised
+    against SQLite.
     """
     with _store() as store:
         return screen_all(store)
 
 
 def _rows() -> list:
-    path = Settings.from_env().db_path
-    stamp = str(path.stat().st_mtime_ns) if path.exists() else "missing"
+    with _store() as store:
+        stamp = store.revision()
     return _screened(stamp)
-
-
-def _as_dict(pick: picks_module.Pick) -> dict[str, Any]:
-    return {
-        "ticker": pick.ticker,
-        "name": pick.name,
-        "sector": pick.sector,
-        "price": pick.price,
-        "target": pick.target,
-        "entry_3by4": pick.entry_3by4,
-        "entry_2by3": pick.entry_2by3,
-        "upside_pct": pick.upside_pct,
-        "discount_to_entry_pct": pick.discount_to_entry_pct,
-        "actionable": pick.is_actionable,
-        "buy_signals": pick.buy_signals,
-        "sell_signals": pick.sell_signals,
-        "scored": pick.scored,
-        "models_agreeing": pick.models_agreeing,
-        "quality_buys": pick.quality_buys,
-        "quality_sells": pick.quality_sells,
-        "tier": pick.tier.value,
-        "flags": pick.flags,
-    }
 
 
 @app.get("/health")
 def health() -> dict[str, Any]:
-    path = Settings.from_env().db_path
-    if not path.exists():
-        raise HTTPException(503, f"no database at {path}")
-    return {"status": "ok", "database": str(path), "companies": len(_rows())}
+    settings = Settings.from_env()
+    if not database_ready(settings):
+        raise HTTPException(503, f"no database at {redact(settings.db_path)}")
+    # Redacted: a DSN carries a live password, and /health is the endpoint most
+    # likely to be pasted into a chat or an uptime checker.
+    return {
+        "status": "ok",
+        "database": redact(settings.db_path),
+        "companies": len(_rows()),
+    }
 
 
 @app.get("/picks")
@@ -119,7 +106,7 @@ def list_picks(
         ranked = [p for p in ranked if (p.sector or "").casefold() == wanted]
     return {
         "count": len(ranked),
-        "picks": [_as_dict(p) for p in ranked[:limit]],
+        "picks": [pick_payload(p) for p in ranked[:limit]],
         "disclaimer": SHORT_DISCLAIMER,
     }
 
@@ -169,43 +156,22 @@ def company(ticker: str) -> dict[str, Any]:
         trends = [_trend(store, ticker, label, aliases) for label, aliases in TREND_LINES]
 
     return {
-        **_as_dict(picks_module.to_pick(row)),
+        **pick_payload(picks_module.to_pick(row)),
         "targets": {
             "ev_ebitda": row.target_ev_ebitda,
             "pe_yearly": row.target_pe_yearly,
             "pe_quarterly": row.target_pe_quarterly,
         },
-        "signals": [
-            {
-                "key": s.key, "label": s.label, "verdict": s.verdict.value,
-                "value": s.value, "rule": s.rule, "available": s.available,
-            }
-            for s in row.screening.signals
-        ],
+        "signals": [signal_payload(s) for s in row.screening.signals],
         "trends": [t for t in trends if t],
         "disclaimer": SHORT_DISCLAIMER,
     }
 
 
 def _trend(store: Store, ticker: str, label: str, aliases: tuple[str, ...]) -> dict | None:
-    """Eight-quarter trend for one line item."""
+    """Eight-quarter trend for one line item, first alias with history winning."""
     for alias in aliases:
-        rows = store.quarterly_history(ticker, alias)
-        if not rows:
-            continue
-        periods = [date.fromisoformat(p) for p, _ in rows]
-        trend = analyse(label, periods, [v for _, v in rows])
-        return {
-            "label": trend.label,
-            "periods": [f"{p:%b %Y}" for p in trend.periods],
-            "values": trend.values,
-            "yoy_growth_pct": trend.yoy_growth,
-            "ttm": trend.ttm,
-            "ttm_prior": trend.ttm_prior,
-            "ttm_growth_pct": trend.ttm_growth_pct,
-            "forecast": trend.forecast,
-            "forecast_period": trend.forecast_period,
-            "confidence": trend.confidence.value,
-            "note": trend.note,
-        }
+        payload = trend_payload(label, store.quarterly_history(ticker, alias))
+        if payload is not None:
+            return payload
     return None

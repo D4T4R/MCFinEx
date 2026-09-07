@@ -1,0 +1,47 @@
+# Learn more https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files
+
+# dependencies
+node_modules/
+
+# Expo
+.expo/
+dist/
+web-build/
+expo-env.d.ts
+
+# Native
+.kotlin/
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# Metro
+.metro-health-check*
+
+# debug
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# macOS
+.DS_Store
+*.pem
+
+# local env files
+.env*.local
+
+# Firebase project config. Not a secret -- it ships inside the APK -- but this
+# repository is public, and the file names the project it belongs to. EAS reads
+# it from a file secret instead; see app/README.md.
+google-services.json
+GoogleService-Info.plist
+
+# typescript
+*.tsbuildinfo
+
+# generated native folders
+/ios
+/android

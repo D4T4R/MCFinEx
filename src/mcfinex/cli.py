@@ -87,6 +87,18 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--csv", help="write the full screen to this CSV instead of printing")
     p.set_defaults(handler=cmd_screen)
 
+    p = sub.add_parser("publish", help="write the screen as a static JSON site")
+    p.add_argument("-o", "--out", default="site",
+                   help="directory to write index.json and company/ into")
+    p.set_defaults(handler=cmd_publish)
+
+    p = sub.add_parser("notify", help="push what changed to the phone app over FCM")
+    p.add_argument("--dry-run", action="store_true",
+                   help="print what would be sent, and leave the state untouched")
+    p.add_argument("--limit", type=int, default=40,
+                   help="never send more than this many in one run")
+    p.set_defaults(handler=cmd_notify)
+
     p = sub.add_parser("prices", help="refresh closing prices from the NSE bhavcopy")
     p.add_argument("--no-revalue", action="store_true",
                    help="update prices without recomputing stored valuations")
@@ -317,6 +329,90 @@ def cmd_screen(args) -> int:
         print(f"{s.ticker:<12} {str(s.name)[:32]:<32} {s.buy_count:>3} {s.sell_count:>4} "
               f"{price:>10} {target:>10} {upside:>8}")
     print(f"\n{len(rows)} companies screened. `mcfinex-dashboard` for the full view.")
+    return 0
+
+
+def cmd_publish(args) -> int:
+    """Build the JSON the phone app reads.
+
+    Deliberately fails rather than publishing an empty screen: the app has no
+    way to tell "nothing qualified today" from "the database was unreachable",
+    and overwriting a good site with an empty one is worse than not publishing.
+    """
+    from pathlib import Path
+
+    from .publish import write_site
+
+    with Store(args.db) as store:
+        rows = screen_all(store)
+        if not rows:
+            log.error("nothing screened; refusing to publish an empty site")
+            return 1
+        written = write_site(store, Path(args.out), rows)
+    log.info("published %s", written.summary)
+    return 0
+
+
+def cmd_notify(args) -> int:
+    """Send what changed since the last run to the phone.
+
+    The state is saved only when every message was accepted. Advancing it after
+    a partial failure would consume the transition -- the next run would see
+    nothing new and the alert would be lost rather than delayed.
+    """
+    from .notify import (
+        FcmError, FcmSender, collapse, deliver, evaluate_store, load_credentials,
+    )
+
+    with Store(args.db) as store:
+        # alert_state arrived after the database did, and the nightly job never
+        # runs `init` -- it seeds, prices and publishes against a database that
+        # already exists. Without this the first run on any older database, the
+        # hosted one included, dies on "no such table". CREATE TABLE IF NOT
+        # EXISTS makes it a no-op every night after the first.
+        store.create_schema()
+        alerts, state = evaluate_store(store)
+        # Collapsed before the limit is applied, so `--limit 40` means forty
+        # buzzes rather than forty alerts that might be twelve companies.
+        pending = collapse(alerts)[: args.limit]
+
+        # Before every branch that writes. A dry run that establishes the
+        # baseline is worse than useless: the real run that follows sees no
+        # history to compare against and stays silent, so the first night of
+        # alerts is lost to the command that was meant to preview it.
+        if args.dry_run:
+            # Prints rather than logs: this is the output somebody asked for,
+            # not a running commentary on a job.
+            for item in pending:
+                alert = item.alert
+                print(f"{alert.trigger.value:<16} {alert.ticker:<12} {alert.headline}")
+                print(f"{'':<16} {'':<12} {item.body}")
+                print(f"{'':<16} {'':<12} -> {item.condition}")
+            print(f"\n{len(pending)} would be sent. State not advanced.")
+            return 0
+
+        if not pending:
+            # State is still recorded. With nothing sent there is no transition
+            # to lose, and this is the write that turns the first run into a
+            # baseline rather than a night that pushes every actionable company.
+            store.save_alert_state({t: s.as_dict() for t, s in state.items()})
+            log.info("nothing to send; state recorded for %d companies", len(state))
+            return 0
+
+        try:
+            sender = FcmSender(load_credentials())
+        except FcmError as exc:
+            log.error("%s", exc)
+            return 1
+
+        result = deliver(sender, pending)
+        if not result.ok:
+            log.error("%d of %d failed; not advancing state, so these retry tomorrow",
+                      len(result.failed), len(pending))
+            return 1
+
+        store.save_alert_state({t: s.as_dict() for t, s in state.items()})
+    log.info("sent %d notification(s)", len(result.delivered))
     return 0
 
 
