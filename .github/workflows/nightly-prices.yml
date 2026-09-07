@@ -5,14 +5,21 @@ name: Nightly prices
 # of requests to a free service.
 #
 # NSE publishes the bhavcopy after the close -- 15:30 IST is 10:00 UTC, and the
-# file lands a while later -- so this runs at 13:00 UTC (18:30 IST) on weekdays.
-# GitHub's scheduler is best-effort and can lag under load, which does not
-# matter here: the loader walks back to the most recent published session, so a
-# late or missed run corrects itself the next night, and exchange holidays need
-# no special handling.
+# file lands a while later -- so this runs at 14:37 UTC (20:07 IST) on weekdays.
+#
+# :37 rather than :00 deliberately. GitHub runs schedules best-effort and warns
+# that the top of the hour is its busiest slot; over three weeks on "0 14" not a
+# single run ever started on the hour -- the earliest was 26 minutes late, the
+# latest 9h23m, and on 2026-09-07 the run was dropped entirely rather than
+# merely delayed. An odd minute does not make it guaranteed, nothing does, but
+# it is the one factor on this side of the API.
+#
+# Lateness is survivable regardless: the loader walks back to the most recent
+# published session, so a late or missed run corrects itself the next night, and
+# exchange holidays need no special handling.
 on:
   schedule:
-    - cron: "0 14 * * 1-5"
+    - cron: "37 14 * * 1-5"
   workflow_dispatch: {}
 
 # Never let two refreshes overlap: they write the same rows.
