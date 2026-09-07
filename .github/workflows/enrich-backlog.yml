@@ -10,11 +10,18 @@ name: Enrich backlog
 # enriched names while every other tier sat near 1%. The tier was partly
 # selecting for having been enriched rather than for quality.
 #
-# Four requests per company at one second apart, so the whole backlog is roughly
-# three hours of requests to a free service. Deliberately chipped away in
-# batches rather than done in one run: it is polite to screener, it keeps each
-# job well inside its timeout, and progress is committed per company, so a run
-# that dies loses only the company in flight.
+# Four requests per company, and the measured cost is ~15.2s each (14-22s over
+# 474 companies on run 33959733330) -- roughly ten hours for the whole backlog,
+# not the three an earlier version of this comment claimed. That estimate
+# counted only the one-second throttle between requests and ignored the round
+# trip, which is most of it. It is the number that made a batch of 800 look
+# reasonable; 800 was cancelled at the two-hour timeout having done 474.
+#
+# So: batches, sized against the timeout rather than against a guess. 250 takes
+# about an hour and leaves half the budget spare, which matters because the
+# per-company time varies by 50% with whatever screener is doing. Progress is
+# committed per company, so a run that dies loses only the company in flight and
+# the next run picks up where it stopped.
 #
 # Runs well clear of "Nightly prices" -- both write to the same database, and
 # GitHub's scheduler can lag by hours.
@@ -24,9 +31,9 @@ on:
   workflow_dispatch:
     inputs:
       batch:
-        description: "How many companies to enrich in this run"
+        description: "How many companies to enrich (250 ~= 1h; over 700 will hit the timeout)"
         required: false
-        default: "400"
+        default: "250"
 
 concurrency:
   group: enrich-backlog
@@ -35,10 +42,19 @@ concurrency:
 jobs:
   enrich:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    # Headroom for a hand-run batch larger than the default, and for a slow
+    # night. The default of 250 needs about an hour of this; the ceiling is here
+    # so an over-large --missing is throttled by screener rather than guillotined
+    # by the runner, which reports as "cancelled" and looks like somebody
+    # pressed a button.
+    timeout-minutes: 180
     env:
       MCFINEX_PG: ${{ secrets.MCFINEX_PG }}
-      BATCH: ${{ github.event.inputs.batch || '400' }}
+      # Two defaults, and they have to agree. The input default only applies to
+      # a hand-run dispatch; on a schedule `inputs.batch` is empty and this
+      # fallback is what runs. Changing one and not the other is silent -- the
+      # button would say 250 while every night still did 400.
+      BATCH: ${{ github.event.inputs.batch || '250' }}
     steps:
       - uses: actions/checkout@v4
 
