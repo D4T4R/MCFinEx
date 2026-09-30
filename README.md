@@ -66,7 +66,7 @@ current quarter's results; `--force` overrides that.
 
 A seeded company carries a symbol, an ISIN and a price — nothing else. Screening
 needs financials, so until it is scraped it is invisible in the app. The nightly
-runs `scrape --missing 60` to drain that backlog at about 2.3s per company, so a
+runs `scrape --missing 100` to drain that backlog at about 2.3s per company, so a
 new listing appears within a night or two instead of waiting for the quarterly
 scrape. Bounded rather than `--all`, which walks every stored ticker asking
 `needs_refresh` one at a time — some 2,600 round trips to Supabase before the
