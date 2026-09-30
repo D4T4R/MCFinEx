@@ -15,6 +15,13 @@ from .db.store import COMPANY_COLUMNS, Store
 
 #: Copied in this order so the foreign keys on financials and valuations always
 #: have their company row already present.
+#:
+#: `alert_state` is deliberately absent. It is not scraped data but a record of
+#: what has already been said to a reader, and it accumulates wherever `notify`
+#: runs -- the hosted database, not a local scrape. Every table listed here is
+#: emptied before it is refilled, so adding it would wipe that record on each
+#: push; the next run would find no history, treat the whole universe as new and
+#: send nothing. Left out, it survives a push untouched.
 TABLES = ("companies", "financials", "valuations", "result_calendar")
 
 #: Rows per round trip. Large enough that 1.4 million rows do not take all day,

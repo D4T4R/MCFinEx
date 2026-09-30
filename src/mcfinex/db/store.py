@@ -409,6 +409,55 @@ class Store:
             self.conn.executemany("DELETE FROM companies WHERE ticker = ?", rows)
         return len(tickers)
 
+    #: Everything keyed by ticker that a rename has to carry with it. Adding a
+    #: ticker-keyed table without adding it here leaves its rows behind, pointing
+    #: at a symbol that no longer exists -- which for `financials` would mean
+    #: quietly losing a company's entire history.
+    TICKER_TABLES = ("financials", "valuations", "result_calendar", "alert_state")
+
+    def has_history(self, ticker: str) -> bool:
+        """Whether anything has actually been scraped for this ticker."""
+        row = self.conn.execute(
+            "SELECT COUNT(*) AS n FROM financials WHERE ticker = ?", (ticker,)
+        ).fetchone()
+        return bool(row and row["n"])
+
+    def rename_ticker(self, old: str, new: str) -> None:
+        """Move a company and all its history onto a new symbol.
+
+        The exchange renames companies, and the seeder keys on ticker, so
+        without this a rename silently forks the company: a fresh empty row
+        under the new symbol, and the old one keeping every quarter of history
+        while dropping out of the price feed. The orphan then goes on being
+        screened forever on whatever price it held the day the rename landed.
+
+        Any row already sitting under ``new`` is discarded first -- that is the
+        empty row the seeder just made. :meth:`has_history` is how a caller
+        checks this is safe; doing it here as well would hide the ambiguous case
+        rather than refuse it.
+
+        The order is forced by the foreign keys, which cascade on delete but not
+        on update. Writing the new parent first means the children always have
+        one to point at; deleting the old parent last removes nothing, because
+        by then nothing references it.
+        """
+        if old == new:
+            return
+        columns = ", ".join(COMPANY_COLUMNS)
+        with self.conn:
+            for table in self.TICKER_TABLES:
+                self.conn.execute(f"DELETE FROM {table} WHERE ticker = ?", (new,))
+            self.conn.execute("DELETE FROM companies WHERE ticker = ?", (new,))
+            self.conn.execute(
+                f"INSERT INTO companies (ticker, {columns}) "
+                f"SELECT ?, {columns} FROM companies WHERE ticker = ?",
+                (new, old),
+            )
+            for table in self.TICKER_TABLES:
+                self.conn.execute(
+                    f"UPDATE {table} SET ticker = ? WHERE ticker = ?", (new, old))
+            self.conn.execute("DELETE FROM companies WHERE ticker = ?", (old,))
+
     def tickers(self, *, only_scannable: bool = True) -> list[str]:
         sql = "SELECT ticker FROM companies"
         if only_scannable:
@@ -487,13 +536,7 @@ class Store:
         where it looks perfectly current. Ambiguity is not identity, so these are
         simply not matchable; :meth:`duplicate_isins` reports them instead.
         """
-        return {
-            r["isin"]: r["ticker"] for r in self.conn.execute(
-                "SELECT isin, MIN(ticker) AS ticker FROM companies "
-                "WHERE isin IS NOT NULL AND isin <> '' "
-                "GROUP BY isin HAVING COUNT(*) = 1"
-            )
-        }
+        return {isin: t[0] for isin, t in self.isin_groups().items() if len(t) == 1}
 
     def duplicate_isins(self) -> dict[str, list[str]]:
         """ISINs held by more than one company row.
@@ -502,12 +545,18 @@ class Store:
         changes symbol gains a second row and the old one stops being priced
         while still being screened on its last known price.
         """
+        return {isin: t for isin, t in self.isin_groups().items() if len(t) > 1}
+
+    def isin_groups(self) -> dict[str, list[str]]:
+        """Every stored ISIN and the ticker or tickers holding it.
+
+        The single source for both of the above, so "unambiguous" and
+        "duplicated" cannot come to disagree about the same row.
+        """
         out: dict[str, list[str]] = {}
         for row in self.conn.execute(
-            "SELECT isin, ticker FROM companies WHERE isin IN ("
-            "  SELECT isin FROM companies WHERE isin IS NOT NULL AND isin <> '' "
-            "  GROUP BY isin HAVING COUNT(*) > 1"
-            ") ORDER BY isin, ticker"
+            "SELECT isin, ticker FROM companies "
+            "WHERE isin IS NOT NULL AND isin <> '' ORDER BY isin, ticker"
         ):
             out.setdefault(row["isin"], []).append(row["ticker"])
         return out

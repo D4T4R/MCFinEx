@@ -45,6 +45,7 @@ python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
 mcfinex init                          # create the SQLite schema
 mcfinex universe                      # seed ~2550 companies + ISINs (unions 7 sessions)
 mcfinex prune --apply                 # drop ETFs and fund units (not companies)
+mcfinex renames                       # companies the exchange has renamed (--apply to move)
 mcfinex scrape RELIANCE TCS           # scrape named companies
 mcfinex scrape --from-template        # scrape the companies tracked in the workbook
 mcfinex scrape --all --limit 50       # or work through the seeded universe
@@ -116,6 +117,25 @@ Its `SctySrs` column is the same field with a different vocabulary — a dozen
 group codes rather than NSE's `EQ`/`BE` — and series `F` carries bonds with `INE`
 ISINs, so the ISIN prefix that separates equity from fund units on NSE does not
 separate equity from debt here. The group is what decides.
+
+## Renamed companies
+
+The exchange renames companies, and the seeder keys on ticker, so a rename used
+to fork one company into two rows: an empty one under the new symbol, and the
+old one holding every quarter of history while dropping out of the price feed.
+The orphan then went on being screened forever, on whatever price it held the
+day the rename landed — and since both rows looked ordinary, nothing noticed.
+
+`universe` now follows the rename before seeding, moving the company and its
+history across all four ticker-keyed tables. `mcfinex renames` shows what would
+move; `--apply` does it. `--no-renames` on `universe` opts out.
+
+The inference is deliberately narrow: a rename is only taken when the feed lists
+the ISIN under some symbol **and the stored symbol is absent from both feeds
+entirely**. A stored symbol that is still trading is never treated as an old
+name, whatever shares its ISIN — merging two live companies would destroy a
+history that no later run could rebuild. Anything less certain is reported and
+left alone.
 
 Seeding takes only BSE's **main board** (groups A, B, T). Of 2,032 BSE-only
 listings on 2026-09-07, 1,474 were illiquid X/XT names, 386 were SME-platform

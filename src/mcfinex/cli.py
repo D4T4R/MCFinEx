@@ -53,6 +53,9 @@ def _build_parser() -> argparse.ArgumentParser:
                         "illiquid stocks that did not trade)")
     p.add_argument("--no-bse", action="store_true",
                    help="NSE only; skip the BSE main board")
+    p.add_argument("--no-renames", action="store_true",
+                   help="do not follow symbol changes (leaves a renamed company "
+                        "forked into two rows; see `mcfinex renames`)")
     p.set_defaults(handler=cmd_universe)
 
     p = sub.add_parser("scrape", help="scrape companies from screener.in")
@@ -79,6 +82,14 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--all", action="store_true",
                    help="include companies seeded but never scraped")
     p.set_defaults(handler=cmd_push)
+
+    p = sub.add_parser("renames", help="reconcile companies the exchange has renamed")
+    p.add_argument("--apply", action="store_true",
+                   help="actually move the history; default lists only")
+    p.add_argument("--days", type=int, default=7,
+                   help="union this many sessions when deciding what is still trading")
+    p.add_argument("--no-bse", action="store_true", help="NSE only")
+    p.set_defaults(handler=cmd_renames)
 
     p = sub.add_parser("prune", help="remove ETFs and fund units that are not companies")
     p.add_argument("--apply", action="store_true", help="actually delete; default lists only")
@@ -148,6 +159,13 @@ def cmd_universe(args) -> int:
 
     with Store(args.db) as store:
         store.create_schema()
+
+        # Before the upsert, not after. The upsert keys on ticker, so a company
+        # that changed symbol would be inserted as a second row -- and the fix
+        # then has to merge two rows instead of just moving one.
+        if not args.no_renames:
+            _apply_renames(store, listings, args, session)
+
         store.upsert_companies(
             ((l.ticker, {"isin": l.isin, "current_price": l.close}) for l in listings),
             ("isin", "current_price"),
@@ -160,6 +178,44 @@ def cmd_universe(args) -> int:
 
     log.info("seeded %d companies into %s", seeded, redact(args.db))
     return 0
+
+
+def _apply_renames(store, listings, args, session) -> int:
+    """Follow symbol changes before seeding, so the fork never happens.
+
+    Silent when there is nothing to do, which is almost every night. When there
+    is, it says so at INFO -- a company changing its primary key is worth a line
+    in the log even though it is routine.
+
+    Only renames where the old symbol has vanished from both feeds; anything
+    less certain is left for `mcfinex renames` to show a human. Skipped entirely
+    with --no-renames.
+    """
+    feed = list(listings)
+    if not args.no_bse:
+        try:
+            extra, _ = bse.universe(days=args.days, session=session)
+            feed += list(extra)
+        except (bse.BseError, requests.RequestException):
+            # Only narrows what counts as still-trading, which makes the
+            # inference more conservative rather than wrong.
+            pass
+
+    live = {l.ticker for l in feed}
+    found, ambiguous = prices.find_renames(feed, store.isin_groups(), live)
+    applied = 0
+    for rename in found:
+        if store.company(rename.new) is not None and store.has_history(rename.new):
+            log.error("%s and %s both hold %s and both have history; "
+                      "not merging -- reconcile by hand",
+                      rename.old, rename.new, rename.isin)
+            continue
+        store.rename_ticker(rename.old, rename.new)
+        log.info("renamed %s to %s (%s), history moved", rename.old, rename.new, rename.isin)
+        applied += 1
+    for isin, tickers in ambiguous.items():
+        log.warning("ambiguous, left alone: %s held by %s", isin, " and ".join(tickers))
+    return applied
 
 
 def _seed_bse_main_board(store, nse_listings, args, session) -> int:
@@ -333,6 +389,71 @@ def cmd_push(args) -> int:
             match = "ok" if args.all and local == remote or not args.all else ""
             log.info("  %-16s local %9s  remote %9s %s",
                      table, f"{local:,}", f"{remote:,}", match)
+    return 0
+
+
+def cmd_renames(args) -> int:
+    """Move a renamed company's history onto its new symbol.
+
+    The exchange renames companies and the seeder keys on ticker, so a rename
+    forks the company in two: an empty row under the new symbol, and the old one
+    holding every quarter of history while quietly dropping out of the price
+    feed. The orphan keeps being screened, forever, on the price it held the day
+    the rename landed -- and because both rows look perfectly ordinary, nothing
+    downstream notices.
+
+    Lists by default. This rewrites primary keys across four tables, and
+    inferring the wrong pair would merge two companies' histories into one row
+    that no later run could separate, so seeing it first is worth the extra step.
+    """
+    session = requests.Session()
+    listings, sessions = nse.universe(days=args.days, session=session)
+    log.info("nse: %d listings across %d sessions", len(listings), len(sessions))
+    if not args.no_bse:
+        try:
+            extra, _ = bse.universe(days=args.days, session=session)
+            listings = list(listings) + list(extra)
+        except (bse.BseError, requests.RequestException) as exc:
+            # Only narrows what counts as "still trading", so a BSE outage makes
+            # this more conservative, not wrong.
+            log.warning("bse unavailable (%s); judging from nse alone",
+                        type(exc).__name__)
+
+    live = {l.ticker for l in listings}
+    with Store(args.db) as store:
+        store.create_schema()
+        renames, ambiguous = prices.find_renames(listings, store.isin_groups(), live)
+        renames = [
+            prices.Rename(r.isin, r.old, r.new, carries_history=store.has_history(r.old))
+            for r in renames
+        ]
+
+        for isin, tickers in ambiguous.items():
+            log.warning("ambiguous, left alone: %s held by %s", isin, " and ".join(tickers))
+
+        if not renames:
+            print("Nothing to reconcile.")
+            return 0
+
+        for r in renames:
+            history = "with history" if r.carries_history else "empty row"
+            collides = " (replaces an existing empty row)" if store.company(r.new) else ""
+            print(f"  {r.old:<14} -> {r.new:<14} {r.isin}  {history}{collides}")
+
+        if not args.apply:
+            print(f"\n{len(renames)} rename(s). Re-run with --apply to move them.")
+            return 0
+
+        for r in renames:
+            if store.company(r.new) is not None and store.has_history(r.new):
+                # Both sides carry scraped history, so this is not one company
+                # under two names. Merging would destroy one of them.
+                log.error("%s and %s both have history; skipping", r.old, r.new)
+                continue
+            store.rename_ticker(r.old, r.new)
+            log.info("renamed %s to %s", r.old, r.new)
+
+    print(f"\nApplied {len(renames)} rename(s).")
     return 0
 
 

@@ -98,6 +98,61 @@ def merge(primary: Iterable[Listing], secondary: Iterable[Listing],
     return result
 
 
+@dataclass(frozen=True)
+class Rename:
+    """A company the exchange now calls something else."""
+
+    isin: str
+    old: str
+    new: str
+    #: True when the old row is the one holding the scraped history, so the
+    #: rename has something to carry. A rename of an empty row is just tidying.
+    carries_history: bool = False
+
+    def __str__(self) -> str:
+        return f"{self.old} -> {self.new} ({self.isin})"
+
+
+def find_renames(listings: Iterable[Listing], stored_by_isin: Mapping[str, list[str]],
+                 live_tickers: set[str]) -> tuple[list[Rename], dict[str, list[str]]]:
+    """Symbols the exchange has moved on from, and the ones it has not.
+
+    A rename is only safe to infer when the evidence is unambiguous: the feed
+    lists this ISIN under some symbol, and the symbol the database holds it
+    under is **not in the feed at all**. A stored symbol that is still trading
+    is not an old name, whatever else shares its ISIN.
+
+    Returns the renames to apply, and the ISINs left ambiguous -- more than one
+    stored ticker still live, or none of them identifiable. Those are reported
+    rather than guessed: picking wrong merges two companies' histories, which no
+    later run can undo.
+    """
+    feed_by_isin: dict[str, str] = {}
+    for listing in listings:
+        if listing.isin:
+            feed_by_isin.setdefault(listing.isin, listing.ticker)
+
+    renames: list[Rename] = []
+    ambiguous: dict[str, list[str]] = {}
+    for isin, tickers in stored_by_isin.items():
+        current = feed_by_isin.get(isin)
+        if current is None:
+            # Not trading under any symbol today. Could be suspended or
+            # delisted; either way the feed offers no new name to move to.
+            if len(tickers) > 1:
+                ambiguous[isin] = sorted(tickers)
+            continue
+        stale = [t for t in tickers if t not in live_tickers and t != current]
+        if len(stale) != len(tickers) - (1 if current in tickers else 0):
+            # At least one stored symbol other than the current one is still
+            # trading, so these are not two names for one company.
+            ambiguous[isin] = sorted(tickers)
+            continue
+        for old in stale:
+            renames.append(Rename(isin=isin, old=old, new=current))
+    return renames, ambiguous
+
+
 def new_listings(known_isins: set[str], candidates: Iterable[Listing]) -> list[Listing]:
     """Candidates whose ISIN is not already tracked, deduplicated.
 

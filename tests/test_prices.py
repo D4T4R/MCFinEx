@@ -251,3 +251,135 @@ class TestAgainstARealDatabase:
                                   store.tickers_by_isin())
             assert store.update_prices(merged.prices, "2026-09-07") == 1
             assert store.company("ONLYBSE")["current_price"] == 77.5
+
+
+class TestFindRenames:
+    """Inferring that two symbols are one company.
+
+    The bar is high on purpose. A wrong inference merges two companies'
+    histories into a single row, and no later run can take them apart again --
+    the evidence that they were ever separate is what got deleted.
+    """
+
+    def feed(self, *pairs):
+        return [nse(t, i) for t, i in pairs]
+
+    def test_a_stored_symbol_absent_from_the_feed_is_a_rename(self):
+        renames, ambiguous = prices.find_renames(
+            self.feed(("HEGAM", "INE545")), {"INE545": ["HEG"]}, {"HEGAM"})
+        assert [(r.old, r.new) for r in renames] == [("HEG", "HEGAM")]
+        assert ambiguous == {}
+
+    def test_the_forked_pair_is_reconciled(self):
+        # The state the seeder actually leaves behind: both rows present.
+        renames, ambiguous = prices.find_renames(
+            self.feed(("HEGAM", "INE545")), {"INE545": ["HEG", "HEGAM"]}, {"HEGAM"})
+        assert [(r.old, r.new) for r in renames] == [("HEG", "HEGAM")]
+        assert ambiguous == {}
+
+    def test_a_symbol_still_trading_is_never_treated_as_an_old_name(self):
+        # Two live symbols sharing an ISIN is not a rename, whatever else is
+        # true. Renaming one onto the other would delete a real company.
+        renames, ambiguous = prices.find_renames(
+            self.feed(("HEGAM", "INE545")), {"INE545": ["HEG", "HEGAM"]},
+            {"HEG", "HEGAM"})
+        assert renames == []
+        assert ambiguous == {"INE545": ["HEG", "HEGAM"]}
+
+    def test_an_isin_absent_from_the_feed_is_left_alone(self):
+        # Suspended or delisted. There is no new name to move to.
+        renames, ambiguous = prices.find_renames([], {"INE545": ["HEG"]}, set())
+        assert renames == []
+        assert ambiguous == {}
+
+    def test_a_duplicate_with_no_feed_row_is_reported_not_guessed(self):
+        renames, ambiguous = prices.find_renames([], {"INE545": ["HEG", "HEGAM"]}, set())
+        assert renames == []
+        assert ambiguous == {"INE545": ["HEG", "HEGAM"]}
+
+    def test_an_unchanged_symbol_produces_nothing(self):
+        renames, _ = prices.find_renames(
+            self.feed(("ACME", "INE1")), {"INE1": ["ACME"]}, {"ACME"})
+        assert renames == []
+
+    def test_a_listing_with_no_isin_cannot_rename_anything(self):
+        renames, _ = prices.find_renames(
+            [nse("MYSTERY", "")], {"INE1": ["ACME"]}, {"MYSTERY"})
+        assert renames == []
+
+
+class TestRenameTicker:
+    """Moving a company across four tables without losing any of it."""
+
+    def _company(self, store, ticker, isin, *, history=True):
+        store.upsert_company(ticker, {"isin": isin, "name": f"{ticker} Ltd",
+                                      "current_price": 100.0,
+                                      "last_updated": "2026-08-19"})
+        if history:
+            store.replace_financials(ticker, [("2026-03-01", "quarters", "Sales", 42.0)])
+            store.replace_valuations(ticker, "ev_ebitda", {"target": 200.0})
+
+    def test_history_follows_the_new_symbol(self, tmp_path):
+        with Store(tmp_path / "s.db") as store:
+            store.create_schema()
+            self._company(store, "HEG", "INE545")
+            store.rename_ticker("HEG", "HEGAM")
+
+            assert store.company("HEG") is None
+            assert store.company("HEGAM")["isin"] == "INE545"
+            assert store.series("HEGAM", "quarters", "Sales") == [42.0]
+            assert store.valuation_fields("HEGAM", "ev_ebitda") == {"target": 200.0}
+
+    def test_the_empty_row_the_seeder_made_is_replaced(self, tmp_path):
+        with Store(tmp_path / "s.db") as store:
+            store.create_schema()
+            self._company(store, "HEG", "INE545")
+            store.upsert_company("HEGAM", {"isin": "INE545"})   # bare, from seeding
+            store.rename_ticker("HEG", "HEGAM")
+
+            assert store.isin_groups() == {"INE545": ["HEGAM"]}
+            assert store.series("HEGAM", "quarters", "Sales") == [42.0]
+
+    def test_alert_state_moves_too(self, tmp_path):
+        # Left behind, the renamed company looks new to the alert rules and
+        # fires an entry-reached notification for a price that has not moved.
+        from mcfinex.alerts import Snapshot
+
+        with Store(tmp_path / "s.db") as store:
+            store.create_schema()
+            self._company(store, "HEG", "INE545")
+            store.save_alert_state({"HEG": Snapshot("high_conviction", True, 40.0).as_dict()})
+            store.rename_ticker("HEG", "HEGAM")
+
+            state = store.alert_state()
+            assert "HEG" not in state
+            assert state["HEGAM"]["tier"] == "high_conviction"
+
+    def test_every_ticker_keyed_table_is_covered(self, tmp_path):
+        # The guard against adding a table and forgetting this list: any table
+        # with a ticker column has to be in TICKER_TABLES or its rows are
+        # stranded under a symbol that no longer exists.
+        with Store(tmp_path / "s.db") as store:
+            store.create_schema()
+            keyed = {
+                t for t in ("companies", "financials", "valuations",
+                            "result_calendar", "alert_state")
+                if any(c[1] == "ticker"
+                       for c in store.conn.execute(f"PRAGMA table_info({t})").fetchall())
+            }
+            assert keyed - {"companies"} == set(Store.TICKER_TABLES)
+
+    def test_renaming_to_itself_is_a_no_op(self, tmp_path):
+        with Store(tmp_path / "s.db") as store:
+            store.create_schema()
+            self._company(store, "HEG", "INE545")
+            store.rename_ticker("HEG", "HEG")
+            assert store.series("HEG", "quarters", "Sales") == [42.0]
+
+    def test_has_history_distinguishes_the_two_rows(self, tmp_path):
+        with Store(tmp_path / "s.db") as store:
+            store.create_schema()
+            self._company(store, "HEG", "INE545")
+            store.upsert_company("HEGAM", {"isin": "INE545"})
+            assert store.has_history("HEG")
+            assert not store.has_history("HEGAM")
