@@ -27,6 +27,33 @@ from dataclasses import dataclass
 # the check was lost in the rewrite.
 FUND_ISIN_PREFIX = "INF"
 
+#: An Indian ISIN is IN + issuer type + a four-character company code + a
+#: two-digit *security* type at [7:9] + serial + check digit. ``01`` is ordinary
+#: equity, and it is what a company page on screener describes.
+#:
+#: Everything else in that field is an instrument with no financials of its own,
+#: so seeding one guarantees a row that can never be scraped -- and an
+#: unscrapeable row sits at the head of the backlog being retried every night.
+#: Measured on 2026-09-30, requiring ``01`` excluded exactly two rows across both
+#: exchanges: CENTEXT-RE, a rights entitlement carried in NSE's BE series, and
+#: QDLCCPS, Quint Digital's convertible preference shares on BSE. 4,322 of 4,323
+#: BSE equity rows and 2,727 of 2,728 NSE ones are ``01``.
+#:
+#: Kept as a set so widening it is one edit. If a real company is ever excluded
+#: the symptom is the one this project keeps running into -- a company silently
+#: absent -- so the count of skipped rows is reported by the caller.
+EQUITY_ISIN_TYPES = frozenset({"01"})
+
+
+def is_ordinary_equity(isin: str) -> bool:
+    """Whether an ISIN denotes a company's ordinary shares.
+
+    A malformed or short ISIN fails rather than passes: the point is to seed only
+    what can be scraped, and an identifier we cannot read is not evidence that we
+    can.
+    """
+    return len(isin) >= 9 and isin[7:9] in EQUITY_ISIN_TYPES
+
 
 @dataclass(frozen=True)
 class Listing:
@@ -68,6 +95,11 @@ def parse_udiff(text: str, *, series: frozenset[str], exchange: str = "",
         ticker = (row.get("TckrSymb") or "").strip().upper()
         isin = (row.get("ISIN") or "").strip()
         if not ticker or isin.startswith(FUND_ISIN_PREFIX):
+            continue
+        if not is_ordinary_equity(isin):
+            # A rights entitlement or a preference share. It trades in an equity
+            # series, has no company page, and if seeded would be retried by
+            # every scrape of the backlog for as long as the row exists.
             continue
         security_id = None
         if security_id_column:

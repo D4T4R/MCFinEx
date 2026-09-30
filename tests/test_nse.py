@@ -79,8 +79,8 @@ class TestUniverse:
 
         from mcfinex.sources.nse import universe
 
-        newer = make_zip([HEADER, "2026-08-18,CM,INE1,ACME,EQ,Acme,10.0"])
-        older = make_zip([HEADER, "2026-08-17,CM,INE2,QUIET,EQ,Quiet Co,5.0"])
+        newer = make_zip([HEADER, "2026-08-18,CM,INE123A01011,ACME,EQ,Acme,10.0"])
+        older = make_zip([HEADER, "2026-08-17,CM,INE456B01022,QUIET,EQ,Quiet Co,5.0"])
         self._patch(monkeypatch, {date(2026, 8, 18): newer, date(2026, 8, 17): older})
         listings, sessions = universe(days=2, on=date(2026, 8, 18))
         assert [l.ticker for l in listings] == ["ACME", "QUIET"]
@@ -91,8 +91,8 @@ class TestUniverse:
 
         from mcfinex.sources.nse import universe
 
-        newer = make_zip([HEADER, "2026-08-18,CM,INE1,ACME,EQ,Acme,20.0"])
-        older = make_zip([HEADER, "2026-08-17,CM,INE1,ACME,EQ,Acme,10.0"])
+        newer = make_zip([HEADER, "2026-08-18,CM,INE123A01011,ACME,EQ,Acme,20.0"])
+        older = make_zip([HEADER, "2026-08-17,CM,INE123A01011,ACME,EQ,Acme,10.0"])
         self._patch(monkeypatch, {date(2026, 8, 18): newer, date(2026, 8, 17): older})
         listings, _ = universe(days=2, on=date(2026, 8, 18))
         assert listings[0].close == 20.0
@@ -102,7 +102,7 @@ class TestUniverse:
 
         from mcfinex.sources.nse import universe
 
-        payload = make_zip([HEADER, "2026-08-17,CM,INE1,ACME,EQ,Acme,10.0"])
+        payload = make_zip([HEADER, "2026-08-17,CM,INE123A01011,ACME,EQ,Acme,10.0"])
         self._patch(monkeypatch, {date(2026, 8, 17): payload})  # 18th is a holiday
         listings, sessions = universe(days=1, on=date(2026, 8, 18))
         assert [l.ticker for l in listings] == ["ACME"]
@@ -212,7 +212,7 @@ class TestTransientFailures:
         from mcfinex.sources.nse import universe
         import requests
 
-        friday = make_zip([HEADER, "2026-09-04,CM,INE1,ACME,EQ,Acme,10.0"])
+        friday = make_zip([HEADER, "2026-09-04,CM,INE123A01011,ACME,EQ,Acme,10.0"])
 
         def fetch(day, **kw):
             if day == date(2026, 9, 5):
@@ -254,3 +254,23 @@ class TestTransientFailures:
         monkeypatch.setattr(module, "fetch_bhavcopy", fetch)
         day, payload = latest_bhavcopy(on=date(2026, 9, 5))
         assert (day, payload) == (date(2026, 9, 4), b"payload")
+
+
+class TestOrdinaryEquityOnly:
+    """A rights entitlement rides in on the BE series.
+
+    CENTEXT-RE is a real row from 2026-09-30: series BE, so the equity-series
+    filter keeps it, but it has no company page. Seeded, it joined the scrape
+    backlog and was retried every night -- and once it and one like it were all
+    that remained, the batch failed wholesale and the nightly job went red.
+    """
+
+    def test_a_rights_entitlement_is_dropped(self):
+        payload = make_zip([HEADER,
+                            "2026-09-30,CM,INE281A20018,CENTEXT-RE,BE,Century Extrusions,4.30"])
+        assert parse_bhavcopy(payload) == []
+
+    def test_ordinary_equity_in_the_same_series_is_kept(self):
+        payload = make_zip([HEADER,
+                            "2026-09-30,CM,INE281A01038,CENTEXT,BE,Century Extrusions,4.30"])
+        assert [l.ticker for l in parse_bhavcopy(payload)] == ["CENTEXT"]

@@ -288,6 +288,25 @@ class Store:
             )
         return len(payload)
 
+    def unscraped_tickers(self, limit: int | None = None) -> list[str]:
+        """Companies seeded from a bhavcopy but never scraped, ticker order.
+
+        A seeded row carries a symbol, an ISIN and a price and nothing else. It
+        is not screened -- screening needs financials -- so it is invisible in
+        the app until this backlog drains. New listings arrive here.
+
+        One query rather than `needs_refresh` per company: `scrape --all` walks
+        every stored ticker asking individually, which against a hosted database
+        is some 2,600 round trips before a single page is fetched.
+        """
+        sql = ("SELECT ticker FROM companies WHERE last_updated IS NULL "
+               "ORDER BY ticker")
+        params: list[Any] = []
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(limit)
+        return [r["ticker"] for r in self.conn.execute(sql, params)]
+
     def unenriched_tickers(self, limit: int | None = None) -> list[str]:
         """Scraped companies with no schedule detail yet, oldest scrape first.
 

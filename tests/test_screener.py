@@ -157,3 +157,52 @@ class TestScripCodeFallback:
         with pytest.raises(screener.ScreenerError):
             screener.fetch("NSE", session=sess, delay=0, alias=None)
         assert sess.tried == ["/company/NSE/"]
+
+
+class TestSameCompany:
+    """Verifying that a page belongs to the company we asked for.
+
+    Asking screener for a symbol makes it resolve that symbol, so identity comes
+    free. Asking for a scrip code gets whatever company holds that number, and a
+    wrong number returns a perfectly valid page for someone else. Persisting that
+    files one company's financials under another's ticker, where nothing
+    downstream can detect it: the row looks ordinary and the screen is simply
+    wrong.
+
+    Found by seeding five invented scrip codes and watching A1L quietly acquire
+    Bikaji Foods' accounts.
+    """
+
+    def test_the_real_mismatch_is_caught(self):
+        assert not screener.same_company("A-1 LIMITED", "Bikaji Foods International Ltd")
+
+    def test_bse_name_truncation_is_tolerated(self):
+        # BSE cuts names at thirty characters, so this is the normal case for a
+        # long name, not an edge one.
+        assert screener.same_company("National Stock Exchange of Ind",
+                                     "National Stock Exchange Of India Ltd")
+
+    def test_differing_legal_suffixes_are_tolerated(self):
+        assert screener.same_company("Active Clothing Co  Limited", "Active Clothing Co Ltd")
+        assert screener.same_company("AEGIS LOGISTICS LTD.", "Aegis Logistics Ltd")
+
+    def test_punctuation_and_case_do_not_matter(self):
+        assert screener.same_company("M&M LTD", "m and m ltd")
+
+    def test_a_missing_name_does_not_block(self):
+        # Absence is not evidence of a mismatch, and refusing on it would block
+        # every company whose name was never seeded.
+        assert screener.same_company(None, "Anything Ltd")
+        assert screener.same_company("Anything Ltd", None)
+        assert screener.same_company("", "")
+
+    def test_a_name_of_only_noise_words_does_not_block(self):
+        # Nothing distinguishing to compare, so there is nothing to refuse on.
+        assert screener.same_company("The India Company Limited", "Reliance Industries Ltd")
+
+    def test_two_genuinely_different_companies_are_rejected(self):
+        assert not screener.same_company("Tata Steel Ltd", "Reliance Industries Ltd")
+        assert not screener.same_company("Achyut Healthcare Limited", "Ambo Agritec Ltd")
+
+    def test_one_shared_distinguishing_word_is_enough(self):
+        assert screener.same_company("Ashapuri Gold Ornament Limited", "Ashapuri Gold Ltd")

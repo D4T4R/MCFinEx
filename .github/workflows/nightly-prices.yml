@@ -66,6 +66,24 @@ jobs:
       - name: Pick up newly listed symbols
         run: mcfinex universe
 
+      # Seeding a company only gives it a symbol, an ISIN and a price. Screening
+      # needs financials, and until it has them the company is invisible in the
+      # app -- so without this a new listing waited for the quarterly scrape,
+      # up to three months.
+      #
+      # Measured at 2.3s per company, so 60 is about two and a half minutes
+      # against a 20-minute job that currently uses four. Bounded rather than
+      # `--all` for two reasons: `--all` walks every stored ticker asking
+      # needs_refresh one company at a time, which is ~2,600 round trips to
+      # Supabase before the first page is fetched; and an unbounded batch after
+      # a large seeding would run into the timeout.
+      #
+      # Before `prices`, not after: scraping writes screener's price rounded to
+      # the rupee, and `prices` is what replaces it with the exact close and
+      # revalues. The other order would leave the new companies a day stale.
+      - name: Scrape companies seeded but never scraped
+        run: mcfinex scrape --missing 60
+
       - name: Refresh closing prices
         run: mcfinex prices
 

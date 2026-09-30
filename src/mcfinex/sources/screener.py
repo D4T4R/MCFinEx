@@ -229,6 +229,47 @@ def fetch(ticker: str, *, consolidated: bool = False, session: requests.Session 
     raise RateLimited(f"{ticker}: rate limited")  # unreachable, keeps type checkers happy
 
 
+#: Words that identify no company, so they cannot corroborate one either.
+_NOISE = frozenset({
+    "LIMITED", "LTD", "PRIVATE", "PVT", "PUBLIC", "COMPANY", "CO", "CORPORATION",
+    "CORP", "INC", "THE", "AND", "OF", "INDIA", "INDIAN", "INDUSTRIES",
+})
+
+
+def _tokens(name: str) -> set[str]:
+    cleaned = re.sub(r"[^A-Z0-9]+", " ", (name or "").upper())
+    return {t for t in cleaned.split() if t and t not in _NOISE}
+
+
+def same_company(expected: str | None, scraped: str | None) -> bool:
+    """Whether a scraped page plausibly belongs to the company we asked for.
+
+    Needed because the scrip-code path is not self-verifying. Asking for a symbol
+    makes screener resolve the symbol, so identity comes free; asking for a
+    number gets whatever company holds that number, and a wrong one returns a
+    perfectly valid page for a different company. Persisting that files one
+    company's financials under another's ticker, and nothing downstream can tell
+    -- the row looks ordinary and the screen simply becomes wrong.
+
+    Generous on purpose. BSE truncates its names to thirty characters, so
+    "National Stock Exchange of Ind" has to match "National Stock Exchange Of
+    India Ltd", and legal suffixes differ everywhere. One shared distinguishing
+    word is enough; the failure being guarded against is a *completely*
+    different company, which shares none.
+
+    Returns True when there is nothing to compare. An absent name is not
+    evidence of a mismatch, and refusing on it would block every company whose
+    name was never seeded.
+    """
+    wanted, got = _tokens(expected), _tokens(scraped)
+    if not wanted or not got:
+        return True
+    if wanted & got:
+        return True
+    # A truncated word against its full form: "Ind" inside "India".
+    return any(w.startswith(g) or g.startswith(w) for w in wanted for g in got)
+
+
 def _retry_after(resp: requests.Response, *, fallback: float) -> float:
     """Seconds to wait, preferring the server's own instruction."""
     header = resp.headers.get("Retry-After")

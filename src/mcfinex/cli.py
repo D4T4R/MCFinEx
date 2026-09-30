@@ -67,6 +67,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--consolidated", action="store_true", help="prefer consolidated statements")
     p.add_argument("--force", action="store_true", help="re-scrape even if already current")
     p.add_argument("--limit", type=int, help="stop after N companies")
+    p.add_argument("--missing", type=int, metavar="N",
+                   help="instead of named tickers, scrape up to N companies that "
+                        "were seeded from a bhavcopy but never scraped (new listings)")
     p.set_defaults(handler=cmd_scrape)
 
     p = sub.add_parser("enrich", help="fetch balance-sheet detail for companies")
@@ -265,10 +268,15 @@ def _seed_bse_main_board(store, nse_listings, args, session) -> int:
     # way to reach the screener page at all -- their symbol 404s. Seeding it here
     # rather than leaving `scrape` to discover it means the first scrape works;
     # without it these rows can be priced forever and never screened.
+    # The name comes along too, and not for display: it is the only independent
+    # check that a scrape by scrip code fetched the right company. Screener does
+    # not publish ISINs, so without the exchange's own name there is nothing to
+    # compare a page against.
     store.upsert_companies(
         ((l.ticker, {"isin": l.isin, "current_price": l.close,
-                     "company_id": _scrip_code(l.security_id)}) for l in fresh),
-        ("isin", "current_price", "company_id"),
+                     "company_id": _scrip_code(l.security_id),
+                     "name": l.name or None}) for l in fresh),
+        ("isin", "current_price", "company_id", "name"),
     )
     missing = [l.ticker for l in fresh if _scrip_code(l.security_id) is None]
     if missing:
@@ -290,13 +298,22 @@ def cmd_scrape(args) -> int:
     with Store(args.db) as store:
         store.create_schema()
         tickers = [t.upper() for t in args.tickers]
-        if not tickers and args.from_template:
+        if not tickers and args.missing is not None:
+            tickers = store.unscraped_tickers(limit=args.missing)
+            outstanding = len(store.unscraped_tickers())
+            log.info("%d seeded companies have never been scraped; taking %d",
+                     outstanding, len(tickers))
+            if not tickers:
+                # Nothing to do is the normal case on most nights, and it is not
+                # a failure -- returning 2 here would redden the nightly job.
+                return 0
+        elif not tickers and args.from_template:
             tickers = workbook.tickers_in(args.template)
         elif not tickers and args.all:
             tickers = store.tickers()
         if not tickers:
             log.error("no tickers given; pass them explicitly, or use "
-                      "--from-template / --all after `universe`")
+                      "--missing N / --from-template / --all after `universe`")
             return 2
         if args.limit:
             tickers = tickers[: args.limit]
@@ -320,6 +337,15 @@ def cmd_scrape(args) -> int:
                     alias=stored["company_id"] if stored else None,
                 )
                 company = screener.parse(html, ticker, consolidated=args.consolidated)
+                if not screener.same_company(stored and stored["name"], company.name):
+                    # Refusing costs one company a scrape, which is visible here
+                    # and fixable. Accepting files another company's financials
+                    # under this ticker, which nothing downstream can detect.
+                    failures += 1
+                    log.error("%s: page is %r but the exchange calls it %r; "
+                              "refusing to store -- check company_id",
+                              ticker, company.name, stored["name"])
+                    continue
                 persist(store, company)
                 log.info("[%d/%d] %s  %s", index, len(tickers), ticker, company.name)
             except screener.RateLimited as exc:
@@ -339,6 +365,16 @@ def cmd_scrape(args) -> int:
                     failures, rate_limited, failures - rate_limited, pace.delay)
         if rate_limited:
             log.warning("re-run the same command to pick up the throttled ones")
+    if args.missing is not None:
+        # Draining a backlog, so a failure is expected rather than exceptional:
+        # the tail of it is instruments screener has no page for, and they are
+        # re-offered every night. Failing here would turn the nightly job red
+        # permanently over two dead rows, which teaches whoever reads it to stop
+        # reading it. Loud in the log, green in the run.
+        if failures and failures == len(tickers):
+            log.error("every company in this batch failed; if that persists the "
+                      "head of the backlog is unscrapeable, not the network")
+        return 0
     return 1 if failures and failures == len(tickers) else 0
 
 

@@ -282,3 +282,49 @@ class TestScripCode:
         assert listing.ticker == "NSE"
         assert listing.security_id == "544937"
         assert listing.isin == "INE721I01024"
+
+
+class TestOrdinaryEquityOnly:
+    """Instruments that trade in an equity series but are not a company.
+
+    These matter beyond tidiness. A seeded row that can never be scraped sits in
+    the backlog being retried every night, and when it is the only thing left the
+    batch fails wholesale -- which used to turn the nightly job red permanently.
+
+    The ISIN says which is which: an Indian ISIN carries a two-digit security
+    type at [7:9], and 01 is ordinary equity.
+    """
+
+    def test_rights_entitlements_are_excluded(self):
+        # Real row: CENTEXT-RE arrives in NSE's BE series, so the series filter
+        # lets it through. Type 20 is a rights entitlement.
+        from mcfinex.sources.bhavcopy import is_ordinary_equity
+
+        assert not is_ordinary_equity("INE281A20018")
+        assert not is_ordinary_equity("INE06ZX20015")
+
+    def test_convertible_preference_shares_are_excluded(self):
+        # Real row: QDLCCPS, Quint Digital, BSE group B, type 03.
+        from mcfinex.sources.bhavcopy import is_ordinary_equity
+
+        assert not is_ordinary_equity("INE529E03028")
+
+    def test_ordinary_shares_pass(self):
+        from mcfinex.sources.bhavcopy import is_ordinary_equity
+
+        for isin in ("INE117A01022", "INE208C01025", "INE721I01024", "INE0M8901018"):
+            assert is_ordinary_equity(isin), isin
+
+    def test_a_short_or_malformed_isin_fails_closed(self):
+        from mcfinex.sources.bhavcopy import is_ordinary_equity
+
+        assert not is_ordinary_equity("")
+        assert not is_ordinary_equity("INE12")
+
+    def test_a_rights_entitlement_row_is_dropped_by_the_parser(self):
+        rows = csv_bytes([
+            HEADER,
+            "2026-09-30,CM,STK,890123,INE0M8920010,CONTAIN-RE,B,CONTAINE TECHNOLOGIES,3.10",
+            "2026-09-30,CM,STK,500002,INE117A01022,ABB,A,ABB INDIA LIMITED,7397.10",
+        ])
+        assert [l.ticker for l in bse.main_board(rows)] == ["ABB"]

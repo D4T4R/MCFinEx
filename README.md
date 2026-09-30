@@ -64,6 +64,28 @@ mcfinex export                        # optional: fill a copy of the workbook
 Re-running `scrape` skips anything already checked today or already carrying the
 current quarter's results; `--force` overrides that.
 
+A seeded company carries a symbol, an ISIN and a price — nothing else. Screening
+needs financials, so until it is scraped it is invisible in the app. The nightly
+runs `scrape --missing 60` to drain that backlog at about 2.3s per company, so a
+new listing appears within a night or two instead of waiting for the quarterly
+scrape. Bounded rather than `--all`, which walks every stored ticker asking
+`needs_refresh` one at a time — some 2,600 round trips to Supabase before the
+first page is fetched.
+
+Only rows whose ISIN says **ordinary equity** are seeded. An Indian ISIN carries
+a two-digit security type at `[7:9]`; `01` is ordinary shares. Rights
+entitlements (`20`) and convertible preference shares (`03`) trade inside equity
+series but have no company page, so seeding one guarantees a row that can never
+be scraped and is retried every night — and when such rows were all that
+remained of the backlog, the batch failed wholesale and the nightly went red. On
+2026-09-30 the rule excluded exactly two instruments across both exchanges.
+
+Because the scrip-code path is not self-verifying — asking for a symbol makes
+screener resolve that symbol; asking for a number returns whoever holds it —
+`scrape` checks the page's company name against the exchange's before storing
+anything, and refuses on a clear mismatch. That check was added after five
+invented scrip codes in a test quietly filed Bikaji Foods' accounts under `A1L`.
+
 `universe` unions several trading sessions on purpose. A bhavcopy lists only
 what traded that day, so one file undercounts: 2026-08-14 held 2,713 equity
 listings where a week unioned held 2,867. The 154 missing were illiquid small
