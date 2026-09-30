@@ -383,3 +383,149 @@ class TestRenameTicker:
             store.upsert_company("HEGAM", {"isin": "INE545"})
             assert store.has_history("HEG")
             assert not store.has_history("HEGAM")
+
+
+class TestBackfillingTheScripCode:
+    """Recovering companies seeded before the scrip code was captured.
+
+    Seeding only ever considers companies it does not already have, which is
+    right for seeding and fatal here: the BSE-only rows created before the code
+    was stored became permanently invisible to the seeder. Present, priced every
+    night, and unscrapeable, because screener addresses them by that number and
+    nothing would go back and fill it in.
+
+    63 of one night's 72 scrape failures were exactly this, with the codes
+    sitting unused in the same feed the run had already downloaded.
+    """
+
+    def test_a_missing_code_is_filled_in(self, tmp_path):
+        with Store(tmp_path / "s.db") as store:
+            store.create_schema()
+            store.upsert_company("A1L", {"isin": "INE00PS01015"})   # no company_id
+            assert store.backfill_company_ids({"INE00PS01015": 542012}) == 1
+            assert store.company("A1L")["company_id"] == 542012
+
+    def test_an_existing_code_is_left_alone(self, tmp_path):
+        # A code already recorded came from the company's own screener page,
+        # which is a better authority on screener's id than a third party.
+        with Store(tmp_path / "s.db") as store:
+            store.create_schema()
+            store.upsert_company("A1L", {"isin": "INE00PS01015", "company_id": 111})
+            assert store.backfill_company_ids({"INE00PS01015": 542012}) == 0
+            assert store.company("A1L")["company_id"] == 111
+
+    def test_an_isin_we_do_not_track_changes_nothing(self, tmp_path):
+        with Store(tmp_path / "s.db") as store:
+            store.create_schema()
+            store.upsert_company("A1L", {"isin": "INE00PS01015"})
+            assert store.backfill_company_ids({"INE_OTHER": 999}) == 0
+            assert store.company("A1L")["company_id"] is None
+
+    def test_a_listing_with_no_code_is_skipped(self, tmp_path):
+        with Store(tmp_path / "s.db") as store:
+            store.create_schema()
+            store.upsert_company("A1L", {"isin": "INE00PS01015"})
+            assert store.backfill_company_ids({"INE00PS01015": None}) == 0
+
+    def test_nothing_to_do_is_not_an_error(self, tmp_path):
+        with Store(tmp_path / "s.db") as store:
+            store.create_schema()
+            assert store.backfill_company_ids({}) == 0
+
+
+class TestPruningWhatCannotBeScraped:
+    """Rows already seeded that will never resolve to a company.
+
+    The parser now refuses to seed these, but rows created before it did are
+    still there, and they sit at the head of the scrape backlog being retried
+    every night.
+    """
+
+    def test_rights_entitlements_are_offered_for_pruning(self, tmp_path):
+        with Store(tmp_path / "s.db") as store:
+            store.create_schema()
+            store.upsert_company("CENTEXT-RE", {"isin": "INE281A20018"})
+            store.upsert_company("CENTEXT", {"isin": "INE281A01038"})
+            assert store.fund_unit_tickers() == ["CENTEXT-RE"]
+
+    def test_preference_shares_are_offered(self, tmp_path):
+        with Store(tmp_path / "s.db") as store:
+            store.create_schema()
+            store.upsert_company("QDLCCPS", {"isin": "INE529E03028"})
+            assert store.fund_unit_tickers() == ["QDLCCPS"]
+
+    def test_fund_units_are_still_offered(self, tmp_path):
+        with Store(tmp_path / "s.db") as store:
+            store.create_schema()
+            store.upsert_company("LIQUIDETF", {"isin": "INF740KA1EU7"})
+            assert store.fund_unit_tickers() == ["LIQUIDETF"]
+
+    def test_a_company_with_no_isin_is_never_offered(self, tmp_path):
+        # 21 tracked companies have no ISIN and are perfectly real; a rule that
+        # swept them up would delete a company and its whole history.
+        with Store(tmp_path / "s.db") as store:
+            store.create_schema()
+            store.upsert_company("NOISIN", {"last_updated": "2026-09-01"})
+            store.upsert_company("BLANK", {"isin": "", "last_updated": "2026-09-01"})
+            assert store.fund_unit_tickers() == []
+
+    def test_ordinary_equity_is_never_offered(self, tmp_path):
+        with Store(tmp_path / "s.db") as store:
+            store.create_schema()
+            for t, i in [("ABB", "INE117A01022"), ("NSE", "INE721I01024"),
+                         ("MM", "INE101A01026")]:
+                store.upsert_company(t, {"isin": i})
+            assert store.fund_unit_tickers() == []
+
+
+class TestBackfillingTheName:
+    """The name is what makes the scrip-code scrape verifiable.
+
+    `same_company` passes when there is nothing to compare, which is right -- an
+    absent name is not evidence of a mismatch. But it means a company with no
+    stored name gets no protection, and the companies reached by scrip code are
+    precisely the ones that need it.
+    """
+
+    def test_a_missing_name_is_filled_in(self, tmp_path):
+        with Store(tmp_path / "s.db") as store:
+            store.create_schema()
+            store.upsert_company("NSE", {"isin": "INE721I01024"})
+            assert store.backfill_names({"INE721I01024": "National Stock Exchange of Ind"}) == 1
+            assert store.company("NSE")["name"] == "National Stock Exchange of Ind"
+
+    def test_a_scraped_name_is_not_overwritten(self, tmp_path):
+        # Screener's spelling is the better one once it exists.
+        with Store(tmp_path / "s.db") as store:
+            store.create_schema()
+            store.upsert_company("NSE", {"isin": "INE721I01024",
+                                         "name": "National Stock Exchange Of India Ltd"})
+            assert store.backfill_names({"INE721I01024": "SOMETHING ELSE"}) == 0
+            assert store.company("NSE")["name"] == "National Stock Exchange Of India Ltd"
+
+    def test_a_blank_name_counts_as_missing(self, tmp_path):
+        with Store(tmp_path / "s.db") as store:
+            store.create_schema()
+            store.upsert_company("NSE", {"isin": "INE721I01024", "name": ""})
+            assert store.backfill_names({"INE721I01024": "NSE Ltd"}) == 1
+
+    def test_a_blank_feed_name_is_not_written(self, tmp_path):
+        with Store(tmp_path / "s.db") as store:
+            store.create_schema()
+            store.upsert_company("NSE", {"isin": "INE721I01024"})
+            assert store.backfill_names({"INE721I01024": "   "}) == 0
+            assert store.company("NSE")["name"] is None
+
+    def test_backfilled_name_and_code_make_the_guard_effective(self, tmp_path):
+        # The end state that matters: enough stored to catch a wrong scrip code.
+        from mcfinex.sources.screener import same_company
+
+        with Store(tmp_path / "s.db") as store:
+            store.create_schema()
+            store.upsert_company("A1L", {"isin": "INE00PS01015"})
+            store.backfill_company_ids({"INE00PS01015": 542012})
+            store.backfill_names({"INE00PS01015": "A-1 LIMITED"})
+            stored = store.company("A1L")
+            assert stored["company_id"] == 542012
+            assert not same_company(stored["name"], "Bikaji Foods International Ltd")
+            assert same_company(stored["name"], "A-1 Ltd")

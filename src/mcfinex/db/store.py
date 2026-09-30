@@ -404,18 +404,78 @@ class Store:
     # ---------------------------------------------------------------- reads
 
     def fund_unit_tickers(self) -> list[str]:
-        """Stored rows that are ETFs or mutual fund units, not companies.
+        """Stored rows that are not companies and never will be.
 
-        Identified by the ISIN prefix: INE is an equity share, INF a fund unit.
-        These trade in the EQ series so they arrive through the bhavcopy, but
-        they have no financial statements and cannot be screened.
+        Two rules, both read off the ISIN:
+
+        ``INF`` is a mutual fund unit or ETF where ``INE`` is an equity share.
+        These trade in the EQ series so they arrive through the bhavcopy.
+
+        And the two digits at positions 8-9 are the *security* type, where ``01``
+        is ordinary equity. Anything else in an equity series is a rights
+        entitlement, a preference share or similar -- an instrument with no
+        company page, which therefore sits in the scrape backlog being retried
+        every night for as long as the row exists. The parser now refuses to seed
+        these, but rows seeded before it did are still here.
+
+        Length is checked because a row with no ISIN must not match: 21 tracked
+        companies have none, and they are perfectly real.
         """
         return [
             r["ticker"] for r in self.conn.execute(
-                "SELECT ticker FROM companies WHERE isin LIKE ? ORDER BY ticker",
+                "SELECT ticker FROM companies "
+                "WHERE isin LIKE ? "
+                "   OR (isin IS NOT NULL AND length(isin) = 12 "
+                "       AND substr(isin, 8, 2) <> '01') "
+                "ORDER BY ticker",
                 ("INF%",),
             )
         ]
+
+    def backfill_company_ids(self, scrip_by_isin: Mapping[str, int]) -> int:
+        """Fill in a missing screener id from the exchange, matched on ISIN.
+
+        Needed because seeding only ever looks at companies it does not already
+        have. The BSE-only companies seeded before the scrip code was captured
+        were therefore invisible to it forever -- present, priced nightly, and
+        unscrapeable, because screener addresses them by that number and nothing
+        would ever supply it. 63 of one night's 72 scrape failures were this.
+
+        Only fills where the column is empty. An id already recorded came from
+        the company's own screener page, which is a better authority on screener's
+        id than a third party is.
+        """
+        payload = [(scrip, isin) for isin, scrip in scrip_by_isin.items() if scrip]
+        if not payload:
+            return 0
+        with self.conn:
+            cursor = self.conn.executemany(
+                "UPDATE companies SET company_id = ? "
+                "WHERE isin = ? AND company_id IS NULL",
+                payload,
+            )
+        return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+
+    def backfill_names(self, name_by_isin: Mapping[str, str]) -> int:
+        """Fill in a missing company name from the exchange, matched on ISIN.
+
+        Not for display -- a scrape overwrites it with screener's own spelling.
+        This is the only independent check that a scrape *by scrip code* fetched
+        the right company, since screener publishes no ISIN to compare against.
+        Without a name to check, the guard passes by default, which for the
+        companies that need it most is no guard at all.
+        """
+        payload = [(name.strip(), isin) for isin, name in name_by_isin.items()
+                   if name and name.strip()]
+        if not payload:
+            return 0
+        with self.conn:
+            cursor = self.conn.executemany(
+                "UPDATE companies SET name = ? "
+                "WHERE isin = ? AND (name IS NULL OR name = '')",
+                payload,
+            )
+        return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
 
     def remove(self, tickers: Sequence[str]) -> int:
         """Delete companies and everything hanging off them."""

@@ -259,6 +259,23 @@ def _seed_bse_main_board(store, nse_listings, args, session) -> int:
     fresh = prices.new_listings(known, candidates)
     log.info("bse main board: %d listings across %d sessions, %d not on nse",
              len(candidates), len(bse_sessions), len(fresh))
+
+    # Companies already tracked are skipped above by design, which is exactly
+    # why they need this. The BSE-only companies seeded before the scrip code
+    # was captured were invisible to the seeder forever after: present, priced
+    # every night, and unscrapeable, because screener addresses them by that
+    # number and nothing would ever go back and fill it in. 63 of one night's
+    # 72 scrape failures were companies whose code was sitting in this very feed.
+    backfilled = store.backfill_company_ids(
+        {l.isin: _scrip_code(l.security_id) for l in candidates if l.isin})
+    # And the name, for the same rows: it is what `scrape` checks a page against
+    # when it resolved the company by that scrip code, so filling one without the
+    # other leaves the check passing by default exactly where it is needed.
+    named = store.backfill_names({l.isin: l.name for l in candidates if l.isin})
+    if backfilled or named:
+        log.info("filled in the bse scrip code for %d company(ies) and the name "
+                 "for %d that had none", backfilled, named)
+
     if args.limit:
         fresh = fresh[: args.limit]
     if not fresh:
