@@ -179,15 +179,28 @@ class Company:
 
 def fetch(ticker: str, *, consolidated: bool = False, session: requests.Session | None = None,
           timeout: float = 20.0, delay: float = 1.0, throttle: Throttle | None = None,
-          retries: int = 4) -> str:
+          retries: int = 4, alias: str | int | None = None) -> str:
     """Download a company page, backing off when screener pushes back.
 
     A 429 is a request to slow down, not a missing company, so it is retried
     with an exponential backoff that honours ``Retry-After`` when sent. Pass a
     shared :class:`Throttle` across a run so one rejection slows every
     subsequent request rather than only this one.
+
+    ``alias`` is screener's own id for the company -- the BSE scrip code -- tried
+    once if the symbol 404s. Screener addresses a company by its NSE symbol where
+    it has one and by the scrip code where it does not, so a company BSE lists
+    and NSE does not is unreachable by symbol: ``/company/NSE/`` is a 404 while
+    ``/company/544937/`` is National Stock Exchange of India Ltd. Without this
+    such a company can be seeded and priced but never scraped, and so never
+    reaches the screen at all.
     """
-    path = f"/company/{ticker.upper()}/" + ("consolidated/" if consolidated else "")
+    paths = [f"/company/{ticker.upper()}/"]
+    if alias:
+        paths.append(f"/company/{str(alias).strip().upper()}/")
+    if consolidated:
+        paths = [p + "consolidated/" for p in paths]
+    path, *fallbacks = paths
     sess = session or requests.Session()
     pace = throttle if throttle is not None else Throttle(delay)
 
@@ -195,6 +208,12 @@ def fetch(ticker: str, *, consolidated: bool = False, session: requests.Session 
         pace.wait()
         resp = sess.get(BASE_URL + path, headers={"User-Agent": USER_AGENT}, timeout=timeout)
         if resp.status_code == 404:
+            if fallbacks:
+                # Spends one of the attempts, which is affordable: there are five
+                # by default and only a rate limit needs them. A 404 is a
+                # definite answer about this path, so it is never retried.
+                path, *fallbacks = fallbacks
+                continue
             raise ScreenerError(f"{ticker}: no such company on screener.in")
         if resp.status_code == 429:
             slowed = pace.penalise()

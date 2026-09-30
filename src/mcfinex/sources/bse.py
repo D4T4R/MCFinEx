@@ -70,6 +70,14 @@ EQUITY_GROUPS = frozenset({"A", "B", "T", "X", "XT", "M", "MT", "MS", "TS", "Z",
 #: reads worst. Widening this is a one-line change if that judgement changes.
 MAIN_BOARD_GROUPS = frozenset({"A", "B", "T"})
 
+#: Where the BSE scrip code lives. It matters well beyond pricing: screener.in
+#: keys a company on this number, and for a company BSE lists and NSE does not it
+#: is the *only* way to reach the page -- /company/NSE/ is a 404 while
+#: /company/544937/ is National Stock Exchange of India Ltd. Without it a
+#: BSE-only company can be seeded and priced but never scraped, so it never
+#: reaches the screen and never appears in the app.
+SCRIP_CODE_COLUMN = "FinInstrmId"
+
 RETRY_ATTEMPTS = 3
 RETRY_BACKOFF = 2.0
 
@@ -157,7 +165,8 @@ def parse_bhavcopy(payload: bytes, *,
             "this is not a BSE bhavcopy -- BSE serves an HTML page with HTTP 200 "
             "for a day it has no file for"
         )
-    return parse_udiff(payload.decode("utf-8-sig"), series=groups, exchange=EXCHANGE)
+    return parse_udiff(payload.decode("utf-8-sig"), series=groups, exchange=EXCHANGE,
+                       security_id_column=SCRIP_CODE_COLUMN)
 
 
 def main_board(payload: bytes) -> list[Listing]:

@@ -180,6 +180,22 @@ def cmd_universe(args) -> int:
     return 0
 
 
+def _scrip_code(value: str | None) -> int | None:
+    """A BSE scrip code as an integer, or None if it is not one.
+
+    ``company_id`` is declared INTEGER. SQLite would quietly accept the string
+    the CSV gives us and apply its own affinity; Postgres would reject the
+    insert, so the whole nightly seeding would fail against the hosted database
+    and succeed everywhere it was tested.
+    """
+    if value is None:
+        return None
+    try:
+        return int(str(value).strip())
+    except ValueError:
+        return None
+
+
 def _apply_renames(store, listings, args, session) -> int:
     """Follow symbol changes before seeding, so the fork never happens.
 
@@ -245,10 +261,19 @@ def _seed_bse_main_board(store, nse_listings, args, session) -> int:
     if not fresh:
         return 0
 
+    # company_id is the BSE scrip code, and for these companies it is the only
+    # way to reach the screener page at all -- their symbol 404s. Seeding it here
+    # rather than leaving `scrape` to discover it means the first scrape works;
+    # without it these rows can be priced forever and never screened.
     store.upsert_companies(
-        ((l.ticker, {"isin": l.isin, "current_price": l.close}) for l in fresh),
-        ("isin", "current_price"),
+        ((l.ticker, {"isin": l.isin, "current_price": l.close,
+                     "company_id": _scrip_code(l.security_id)}) for l in fresh),
+        ("isin", "current_price", "company_id"),
     )
+    missing = [l.ticker for l in fresh if _scrip_code(l.security_id) is None]
+    if missing:
+        log.warning("%d bse-only companies have no usable scrip code and cannot "
+                    "be scraped: %s", len(missing), ", ".join(missing[:5]))
     log.info("seeded %d bse-only companies, e.g. %s", len(fresh),
              ", ".join(l.ticker for l in fresh[:5]))
     return len(fresh)
@@ -282,12 +307,17 @@ def cmd_scrape(args) -> int:
                 log.debug("[%d/%d] %s already current", index, len(tickers), ticker)
                 continue
             try:
+                # A BSE-only company is unreachable by its symbol -- screener
+                # addresses those by scrip code, which `universe` stored as
+                # company_id when it seeded them from the BSE bhavcopy.
+                stored = store.company(ticker)
                 html = screener.fetch(
                     ticker,
                     consolidated=args.consolidated,
                     session=session,
                     timeout=settings.request_timeout,
                     throttle=pace,
+                    alias=stored["company_id"] if stored else None,
                 )
                 company = screener.parse(html, ticker, consolidated=args.consolidated)
                 persist(store, company)

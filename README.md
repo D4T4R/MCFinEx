@@ -137,6 +137,15 @@ name, whatever shares its ISIN — merging two live companies would destroy a
 history that no later run could rebuild. Anything less certain is reported and
 left alone.
 
+Seeding a BSE-only company also stores its **scrip code** as `company_id`,
+because screener.in addresses a company by its NSE symbol where it has one and
+by the scrip code where it does not: `/company/NSE/` is a 404 while
+`/company/544937/` is National Stock Exchange of India Ltd. `scrape` tries the
+symbol and falls back to the code. Without it a BSE-only company could be seeded
+and priced every night and never once scraped — and an unscraped company is not
+screened, not published and absent from the app, with nothing reporting a fault.
+NSE's own `FinInstrmId` is an internal token and is deliberately not stored.
+
 Seeding takes only BSE's **main board** (groups A, B, T). Of 2,032 BSE-only
 listings on 2026-09-07, 1,474 were illiquid X/XT names, 386 were SME-platform
 and 82 were flagged non-compliant; median turnover across the lot was ₹1.5 lakh

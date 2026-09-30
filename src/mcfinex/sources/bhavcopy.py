@@ -42,13 +42,24 @@ class Listing:
     name: str
     close: float | None
     exchange: str = ""
+    #: The exchange's own instrument id, when it is one anything else can use.
+    #: Only BSE fills this: its ``FinInstrmId`` is the scrip code, which is what
+    #: screener.in keys a company on and the only way to reach one that is not
+    #: listed on NSE. NSE's column holds an internal token meaningless elsewhere,
+    #: so it is deliberately left empty rather than stored and later trusted.
+    security_id: str | None = None
 
 
-def parse_udiff(text: str, *, series: frozenset[str], exchange: str = "") -> list[Listing]:
+def parse_udiff(text: str, *, series: frozenset[str], exchange: str = "",
+                security_id_column: str | None = None) -> list[Listing]:
     """Map UDiFF rows to listings, keeping only ``series`` and real equity.
 
     Rows with no ticker are dropped rather than carried as blanks: the ticker is
     the identity, and a listing without one cannot be matched to anything.
+
+    ``security_id_column`` is named by the caller rather than assumed, because
+    both exchanges have a ``FinInstrmId`` and only one of them means anything
+    outside its own feed.
     """
     listings: list[Listing] = []
     for row in csv.DictReader(io.StringIO(text)):
@@ -58,6 +69,9 @@ def parse_udiff(text: str, *, series: frozenset[str], exchange: str = "") -> lis
         isin = (row.get("ISIN") or "").strip()
         if not ticker or isin.startswith(FUND_ISIN_PREFIX):
             continue
+        security_id = None
+        if security_id_column:
+            security_id = (row.get(security_id_column) or "").strip() or None
         listings.append(
             Listing(
                 ticker=ticker,
@@ -65,6 +79,7 @@ def parse_udiff(text: str, *, series: frozenset[str], exchange: str = "") -> lis
                 name=(row.get("FinInstrmNm") or "").strip(),
                 close=to_float(row.get("ClsPric")),
                 exchange=exchange,
+                security_id=security_id,
             )
         )
     return listings

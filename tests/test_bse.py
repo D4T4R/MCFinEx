@@ -235,3 +235,50 @@ class TestGroups:
         for group in ("F", "G", "E", "IF", "R"):
             assert group not in bse.EQUITY_GROUPS
             assert group not in bse.MAIN_BOARD_GROUPS
+
+
+class TestScripCode:
+    """The BSE scrip code, and why it is not optional.
+
+    screener.in addresses a company by its NSE symbol where it has one and by the
+    BSE scrip code where it does not. Verified live: /company/NSE/ is a 404 while
+    /company/544937/ is National Stock Exchange of India Ltd. So without the
+    scrip code a BSE-only company can be seeded and priced every night and never
+    once be scraped -- and an unscraped company is not screened, not published,
+    and invisible in the app.
+    """
+
+    def test_the_scrip_code_is_captured(self, payload):
+        abb = bse.parse_bhavcopy(payload)[0]
+        assert abb.security_id == "500002"
+
+    def test_every_main_board_row_carries_one(self, payload):
+        assert all(l.security_id for l in bse.main_board(payload))
+
+    def test_nse_never_supplies_one(self):
+        # NSE's FinInstrmId is an internal token -- 19078 for a gold bond -- and
+        # means nothing to screener. Storing it as company_id would send the
+        # scraper to a page for a different company, or to none.
+        import io
+        import zipfile
+
+        from mcfinex.sources import nse as nse_mod
+
+        header = "TradDt,Sgmt,FinInstrmId,ISIN,TckrSymb,SctySrs,FinInstrmNm,ClsPric"
+        row = "2026-09-30,CM,19078,INE123A01011,ACME,EQ,Acme Ltd,101.50"
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as archive:
+            archive.writestr("BhavCopy.csv", f"{header}\n{row}")
+        listing = nse_mod.parse_bhavcopy(buffer.getvalue())[0]
+        assert listing.security_id is None
+
+    def test_the_nse_ltd_row_resolves_the_way_it_did_live(self):
+        # The company that prompted all this: listed on BSE, not on NSE.
+        rows = csv_bytes([
+            HEADER,
+            "2026-09-30,CM,STK,544937,INE721I01024,NSE,A,National Stock Exchange of Ind,1763.05",
+        ])
+        listing = bse.main_board(rows)[0]
+        assert listing.ticker == "NSE"
+        assert listing.security_id == "544937"
+        assert listing.isin == "INE721I01024"

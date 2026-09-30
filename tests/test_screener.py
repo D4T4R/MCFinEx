@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from mcfinex.sources import screener
 from mcfinex.sources.screener import ScreenerError, parse, to_number
 
 FIXTURE = Path(__file__).parent / "fixtures" / "coastcorp.html"
@@ -85,3 +86,74 @@ class TestSections:
         assert shp.dated_periods()
         assert all(isinstance(p, date) for p in shp.dated_periods())
         assert 0 < shp.latest("Promoters") <= 100
+
+
+class TestScripCodeFallback:
+    """Reaching a company screener does not address by symbol.
+
+    screener.in uses the NSE symbol where a company has one and the BSE scrip
+    code where it does not. Verified against the live site: /company/NSE/ is a
+    404 while /company/544937/ is National Stock Exchange of India Ltd. Without
+    the fallback a BSE-only company is seeded and priced every night and never
+    scraped -- and unscraped means unscreened, unpublished, and absent from the
+    app with nothing anywhere reporting a problem.
+    """
+
+    def _session(self, available):
+        class Response:
+            def __init__(self, path):
+                self.status_code = 200 if path in available else 404
+                self.text = available.get(path, "")
+                self.headers = {}
+
+            def raise_for_status(self):
+                pass
+
+        class Session:
+            def __init__(self):
+                self.tried = []
+
+            def get(self, url, **kwargs):
+                path = url.replace(screener.BASE_URL, "")
+                self.tried.append(path)
+                return Response(path)
+
+        return Session()
+
+    def test_the_symbol_is_tried_first(self):
+        sess = self._session({"/company/ACME/": "<html>acme</html>"})
+        html = screener.fetch("ACME", session=sess, delay=0, alias=999)
+        assert html == "<html>acme</html>"
+        assert sess.tried == ["/company/ACME/"]
+
+    def test_the_scrip_code_is_tried_when_the_symbol_404s(self):
+        sess = self._session({"/company/544937/": "<html>nse ltd</html>"})
+        html = screener.fetch("NSE", session=sess, delay=0, alias=544937)
+        assert html == "<html>nse ltd</html>"
+        assert sess.tried == ["/company/NSE/", "/company/544937/"]
+
+    def test_without_an_alias_a_404_is_still_an_error(self):
+        sess = self._session({})
+        with pytest.raises(screener.ScreenerError, match="no such company"):
+            screener.fetch("NSE", session=sess, delay=0)
+        assert sess.tried == ["/company/NSE/"]
+
+    def test_both_paths_failing_reports_the_symbol_not_the_code(self):
+        # The ticker is what the operator asked for and what everything else
+        # keys on; the scrip code would be a puzzle in a log line.
+        sess = self._session({})
+        with pytest.raises(screener.ScreenerError, match="NSE: no such company"):
+            screener.fetch("NSE", session=sess, delay=0, alias=544937)
+        assert sess.tried == ["/company/NSE/", "/company/544937/"]
+
+    def test_consolidated_applies_to_the_fallback_too(self):
+        sess = self._session({"/company/544937/consolidated/": "<html>c</html>"})
+        screener.fetch("NSE", session=sess, delay=0, alias=544937, consolidated=True)
+        assert sess.tried == ["/company/NSE/consolidated/",
+                              "/company/544937/consolidated/"]
+
+    def test_an_empty_alias_is_not_tried(self):
+        sess = self._session({})
+        with pytest.raises(screener.ScreenerError):
+            screener.fetch("NSE", session=sess, delay=0, alias=None)
+        assert sess.tried == ["/company/NSE/"]
