@@ -473,6 +473,58 @@ class Store:
             )
         }
 
+    def tickers_by_isin(self) -> dict[str, str]:
+        """ISIN to stored ticker, for matching a second exchange to a company.
+
+        The ISIN is the only identifier NSE and BSE share -- symbols differ
+        between them -- so it is what a BSE row has to be matched on.
+
+        **Ambiguous ISINs are omitted.** ``isin`` carries no unique constraint,
+        and when a company is renamed the seeder creates a second row under the
+        new symbol, leaving one security under two tickers: HEG and HEGAM both
+        hold INE545A01024. Picking one of those would be a guess, and the wrong
+        guess writes today's price onto the row the exchange has stopped feeding,
+        where it looks perfectly current. Ambiguity is not identity, so these are
+        simply not matchable; :meth:`duplicate_isins` reports them instead.
+        """
+        return {
+            r["isin"]: r["ticker"] for r in self.conn.execute(
+                "SELECT isin, MIN(ticker) AS ticker FROM companies "
+                "WHERE isin IS NOT NULL AND isin <> '' "
+                "GROUP BY isin HAVING COUNT(*) = 1"
+            )
+        }
+
+    def duplicate_isins(self) -> dict[str, list[str]]:
+        """ISINs held by more than one company row.
+
+        Almost always a rename: the seeder keys on ticker, so a company that
+        changes symbol gains a second row and the old one stops being priced
+        while still being screened on its last known price.
+        """
+        out: dict[str, list[str]] = {}
+        for row in self.conn.execute(
+            "SELECT isin, ticker FROM companies WHERE isin IN ("
+            "  SELECT isin FROM companies WHERE isin IS NOT NULL AND isin <> '' "
+            "  GROUP BY isin HAVING COUNT(*) > 1"
+            ") ORDER BY isin, ticker"
+        ):
+            out.setdefault(row["isin"], []).append(row["ticker"])
+        return out
+
+    def known_isins(self) -> set[str]:
+        """Every ISIN already tracked, scraped or merely seeded.
+
+        Includes the unscraped, because the question this answers is whether
+        seeding a company again would duplicate one -- and a row seeded last
+        night but not yet scraped is still a row.
+        """
+        return {
+            r["isin"] for r in self.conn.execute(
+                "SELECT isin FROM companies WHERE isin IS NOT NULL AND isin <> ''"
+            )
+        }
+
     def all_series(self, wanted: Mapping[str, Sequence[str]],
                    ) -> dict[str, dict[tuple[str, str], list[float]]]:
         """Every requested line item for every company, newest first.

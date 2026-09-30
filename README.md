@@ -19,7 +19,7 @@ old bhavcopy loader used.
 
 ```
 NSE bhavcopy ──> tickers + ISINs ──┐
-                                   ├──> SQLite ──> SSP workbook (Excel computes)
+BSE bhavcopy ──> the gaps NSE left ┤──> SQLite ──> SSP workbook (Excel computes)
 screener.in ──> financial history ─┘
 ```
 
@@ -48,7 +48,7 @@ mcfinex prune --apply                 # drop ETFs and fund units (not companies)
 mcfinex scrape RELIANCE TCS           # scrape named companies
 mcfinex scrape --from-template        # scrape the companies tracked in the workbook
 mcfinex scrape --all --limit 50       # or work through the seeded universe
-mcfinex prices                        # refresh closing prices from the NSE bhavcopy
+mcfinex prices                        # refresh closing prices from both bhavcopies
 mcfinex enrich RELIANCE TCS           # pull balance-sheet detail for named companies
 mcfinex show RELIANCE                 # print stored values and valuations
 mcfinex screen --min-buys 6           # rank by BUY signals
@@ -77,10 +77,51 @@ the same command to pick them up.
 
 Run `prices` after `scrape`. Screener displays the price rounded to the nearest
 rupee — a stock closing at 205.58 is shown as 206 — and column AJ drives the
-current P/E and every target price, so `prices` overwrites it with the exact NSE
-close and recomputes the stored valuations. It is one download rather than one
-request per company, so it is quick enough to run daily: prices move daily,
-fundamentals quarterly.
+current P/E and every target price, so `prices` overwrites it with the exact
+exchange close and recomputes the stored valuations. It is one download rather
+than one request per company, so it is quick enough to run daily: prices move
+daily, fundamentals quarterly.
+
+## Two exchanges
+
+Both bhavcopies, NSE first. A stock that did not trade on NSE on a given day may
+still have traded on BSE, and one close beats a fortnight-old one — on
+2026-09-30 that was 6 companies. `--no-bse` on either command turns it off.
+
+**Matched on ISIN, never on symbol.** A company listed on both carries a
+different ticker on each, so matching BSE rows on `TckrSymb` would miss the ones
+that differ and, worse, occasionally hit a *different* company that happens to
+share a symbol. NSE rows keep matching on ticker, because every stored ticker is
+an NSE symbol and 21 companies have no ISIN recorded at all.
+
+**NSE wins where both traded**, which is nearly always: 2,395 of 2,543 NSE
+listings also traded on BSE. That is the "don't price the same stock twice" case
+and it is the common one.
+
+BSE is best-effort. NSE has already succeeded by the time it is asked, so an
+outage there costs the BSE rows rather than the run. A BSE file for a *different*
+session is refused outright — writing Friday's close under Monday's `price_date`
+would make the staleness invisible.
+
+Two BSE quirks are load-bearing, both verified against the live feed:
+
+- It answers a request for a non-trading day with **HTTP 200 and a 14 KB HTML
+  page**, not a 404. Parsed as CSV that yields no rows, and since a price update
+  only touches companies it already knows, no rows writes nothing and reports
+  success. So the body is checked, not the status code.
+- Only the bare `.CSV` works; the sibling `.csv.zip` serves the same HTML page
+  even on trading days.
+
+Its `SctySrs` column is the same field with a different vocabulary — a dozen
+group codes rather than NSE's `EQ`/`BE` — and series `F` carries bonds with `INE`
+ISINs, so the ISIN prefix that separates equity from fund units on NSE does not
+separate equity from debt here. The group is what decides.
+
+Seeding takes only BSE's **main board** (groups A, B, T). Of 2,032 BSE-only
+listings on 2026-09-07, 1,474 were illiquid X/XT names, 386 were SME-platform
+and 82 were flagged non-compliant; median turnover across the lot was ₹1.5 lakh
+for the day. Their filings are thin and irregular, which is the input a
+mechanical screen reads worst. `sources/bse.py` is where to widen that.
 
 Settings are environment variables, all optional:
 
@@ -401,8 +442,11 @@ src/mcfinex/
   ui/app.py          page navigation
   ui/ideas.py        landing page: shortlist as cards
   ui/dashboard.py    detailed screen: table, search, drill-down
+  prices.py          merges the two exchanges: ISIN matching, NSE precedence
   sources/screener.py  company page parser
-  sources/nse.py       bhavcopy loader
+  sources/bhavcopy.py  the UDiFF rows both exchanges agree on
+  sources/nse.py       NSE bhavcopy: zipped, 404s for a missing day
+  sources/bse.py       BSE bhavcopy: bare CSV, 200s with HTML for one
   export/workbook.py   SSP workbook writer
 tests/               287 tests; screener parsing runs off a saved fixture,
                      the dashboard off Streamlit's AppTest harness

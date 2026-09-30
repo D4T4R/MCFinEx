@@ -11,17 +11,27 @@ targets the current UDiFF feed instead.
 
 from __future__ import annotations
 
-import csv
 import io
 import logging
 import time
 import zipfile
-from dataclasses import dataclass
 from datetime import date, timedelta
 
 import requests
 
+from .bhavcopy import FUND_ISIN_PREFIX, Listing, parse_udiff, to_float
+
 log = logging.getLogger(__name__)
+
+# Re-exported: the UDiFF row shape and the fund-unit rule are shared with BSE,
+# but callers and tests have imported them from here since before there was a
+# second exchange.
+__all__ = [
+    "BHAVCOPY_URL", "EQUITY_SERIES", "FUND_ISIN_PREFIX", "Listing", "NseError",
+    "fetch_bhavcopy", "latest_bhavcopy", "parse_bhavcopy", "universe",
+]
+
+EXCHANGE = "NSE"
 
 BHAVCOPY_URL = (
     "https://nsearchives.nseindia.com/content/cm/"
@@ -33,26 +43,13 @@ USER_AGENT = (
 )
 
 # Only ordinary equity. GB is sovereign gold bonds, and the rest are debt and
-# other instruments that have no company page on screener.
+# other instruments that have no company page on screener. BSE uses a completely
+# different vocabulary in the same column -- see mcfinex.sources.bse.
 EQUITY_SERIES = frozenset({"EQ", "BE"})
-
-# ETFs and mutual fund units trade in the EQ series but are not companies and
-# have no financial statements to screen -- 342 of them in a full universe.
-# Indian ISINs encode this: INE is an equity share, INF a fund unit. The Java
-# original filtered on exactly this and the check was lost in the rewrite.
-FUND_ISIN_PREFIX = "INF"
 
 
 class NseError(RuntimeError):
     pass
-
-
-@dataclass(frozen=True)
-class Listing:
-    ticker: str
-    isin: str
-    name: str
-    close: float | None
 
 
 #: Transient failures worth another go: nsearchives is intermittently slow, and
@@ -177,30 +174,8 @@ def parse_bhavcopy(payload: bytes) -> list[Listing]:
         if not names:
             raise NseError("bhavcopy archive contains no CSV")
         text = archive.read(names[0]).decode("utf-8-sig")
-
-    listings: list[Listing] = []
-    for row in csv.DictReader(io.StringIO(text)):
-        if (row.get("SctySrs") or "").strip().upper() not in EQUITY_SERIES:
-            continue
-        ticker = (row.get("TckrSymb") or "").strip().upper()
-        isin = (row.get("ISIN") or "").strip()
-        if not ticker or isin.startswith(FUND_ISIN_PREFIX):
-            continue
-        listings.append(
-            Listing(
-                ticker=ticker,
-                isin=isin,
-                name=(row.get("FinInstrmNm") or "").strip(),
-                close=_float(row.get("ClsPric")),
-            )
-        )
-    return listings
+    return parse_udiff(text, series=EQUITY_SERIES, exchange=EXCHANGE)
 
 
-def _float(text: str | None) -> float | None:
-    if not text or not text.strip():
-        return None
-    try:
-        return float(text.strip())
-    except ValueError:
-        return None
+#: Kept as a private alias: tests and older callers reached for it directly.
+_float = to_float

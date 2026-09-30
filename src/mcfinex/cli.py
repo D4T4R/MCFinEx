@@ -16,9 +16,10 @@ from .enrich import enrich
 from .export import workbook
 from .migrate import compare, migrate
 from .pipeline import persist, revalue, revalue_all
+from . import prices
 from .report import screen_all
 from .quarters import current_quarter
-from .sources import nse, screener
+from .sources import bse, nse, screener
 
 log = logging.getLogger("mcfinex")
 
@@ -45,11 +46,13 @@ def _build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("init", help="create the database schema")
     p.set_defaults(handler=cmd_init)
 
-    p = sub.add_parser("universe", help="seed tickers and ISINs from the NSE bhavcopy")
+    p = sub.add_parser("universe", help="seed tickers and ISINs from the exchange bhavcopies")
     p.add_argument("--limit", type=int, help="only keep the first N listings")
     p.add_argument("--days", type=int, default=7,
                    help="union this many trading sessions (a single day misses "
                         "illiquid stocks that did not trade)")
+    p.add_argument("--no-bse", action="store_true",
+                   help="NSE only; skip the BSE main board")
     p.set_defaults(handler=cmd_universe)
 
     p = sub.add_parser("scrape", help="scrape companies from screener.in")
@@ -99,9 +102,11 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="never send more than this many in one run")
     p.set_defaults(handler=cmd_notify)
 
-    p = sub.add_parser("prices", help="refresh closing prices from the NSE bhavcopy")
+    p = sub.add_parser("prices", help="refresh closing prices from both bhavcopies")
     p.add_argument("--no-revalue", action="store_true",
                    help="update prices without recomputing stored valuations")
+    p.add_argument("--no-bse", action="store_true",
+                   help="NSE only; do not fill gaps from BSE")
     p.set_defaults(handler=cmd_prices)
 
     p = sub.add_parser("export", help="fill the SSP workbook's input cells")
@@ -127,11 +132,18 @@ def cmd_init(args) -> int:
 
 
 def cmd_universe(args) -> int:
+    """Seed the tracked companies from the exchanges.
+
+    NSE is the whole universe. BSE contributes only its main board, and only
+    companies NSE does not list at all -- matched on ISIN, because a company
+    listed on both carries a different symbol on each and matching on the symbol
+    would seed it a second time under its BSE name.
+    """
     session = requests.Session()
     listings, sessions = nse.universe(days=args.days, session=session)
     if args.limit:
         listings = listings[: args.limit]
-    log.info("%d equity listings across %d sessions (%s to %s)",
+    log.info("nse: %d equity listings across %d sessions (%s to %s)",
              len(listings), len(sessions), min(sessions), max(sessions))
 
     with Store(args.db) as store:
@@ -140,8 +152,50 @@ def cmd_universe(args) -> int:
             ((l.ticker, {"isin": l.isin, "current_price": l.close}) for l in listings),
             ("isin", "current_price"),
         )
-    log.info("seeded %d companies into %s", len(listings), redact(args.db))
+        seeded = len(listings)
+
+        if not args.no_bse:
+            added = _seed_bse_main_board(store, listings, args, session)
+            seeded += added
+
+    log.info("seeded %d companies into %s", seeded, redact(args.db))
     return 0
+
+
+def _seed_bse_main_board(store, nse_listings, args, session) -> int:
+    """Add BSE main-board companies that NSE does not list.
+
+    Main board only (groups A, B and T). The rest of BSE's exclusive listings are
+    SME-platform names, illiquid X/XT stocks and companies flagged non-compliant
+    -- thin, irregular filings, which is the input a mechanical screen reads
+    worst. `mcfinex.sources.bse.MAIN_BOARD_GROUPS` is where to widen that.
+    """
+    try:
+        candidates, bse_sessions = bse.universe(days=args.days, session=session)
+    except (bse.BseError, requests.RequestException) as exc:
+        log.warning("bse universe unavailable (%s); seeded from nse alone",
+                    type(exc).__name__)
+        return 0
+
+    # Already-stored ISINs *and* the ones NSE just supplied: the NSE upsert above
+    # may have introduced ISINs this database had never seen, and they are not
+    # new BSE companies just because the read happens after the write.
+    known = store.known_isins() | {l.isin for l in nse_listings if l.isin}
+    fresh = prices.new_listings(known, candidates)
+    log.info("bse main board: %d listings across %d sessions, %d not on nse",
+             len(candidates), len(bse_sessions), len(fresh))
+    if args.limit:
+        fresh = fresh[: args.limit]
+    if not fresh:
+        return 0
+
+    store.upsert_companies(
+        ((l.ticker, {"isin": l.isin, "current_price": l.close}) for l in fresh),
+        ("isin", "current_price"),
+    )
+    log.info("seeded %d bse-only companies, e.g. %s", len(fresh),
+             ", ".join(l.ticker for l in fresh[:5]))
+    return len(fresh)
 
 
 def cmd_scrape(args) -> int:
@@ -417,27 +471,87 @@ def cmd_notify(args) -> int:
 
 
 def cmd_prices(args) -> int:
-    """Overwrite screener's rounded price with the exact NSE close.
+    """Overwrite screener's rounded price with the exact exchange close.
 
     Screener displays the price to the nearest rupee, so a stock closing at
     205.58 is stored as 206. Column AJ drives the current P/E and every target
     price, so the exact figure matters. Prices also move daily while
     fundamentals move quarterly, which is why this is separate from `scrape`.
+
+    Both exchanges, NSE first. A stock that did not trade on NSE that day may
+    still have traded on BSE, and one close is better than a fortnight-old one.
+    Matching and precedence are :mod:`mcfinex.prices`; BSE is best-effort, since
+    a stale price on some names beats no price refresh at all.
     """
     session = requests.Session()
     day, payload = nse.latest_bhavcopy(session=session)
     listings = nse.parse_bhavcopy(payload)
-    log.info("bhavcopy for %s: %d equity listings", day, len(listings))
+    log.info("nse bhavcopy for %s: %d equity listings", day, len(listings))
+
+    extra: list = []
+    if not args.no_bse:
+        extra = _bse_listings_for(day, session)
 
     with Store(args.db) as store:
         store.create_schema()
-        updated = store.update_prices({l.ticker: l.close for l in listings}, day)
+        _warn_about_duplicate_isins(store)
+        merged = prices.merge(listings, extra, store.tickers_by_isin(),
+                              known_tickers=set(store.tickers(only_scannable=False)))
+        log.info("%s, %d listings matched no tracked company",
+                 merged.summary(), merged.unmatched)
+        updated = store.update_prices(merged.prices, day)
         log.info("updated %d closing prices", updated)
 
         if not args.no_revalue:
             revalued = revalue_all(store)
             log.info("recomputed valuations for %d companies", revalued)
     return 0
+
+
+def _warn_about_duplicate_isins(store) -> None:
+    """Say when one security is stored under two tickers.
+
+    Not fatal, and not caused by the second exchange -- the seeder keys on
+    ticker, so a company that changes symbol gains a row and keeps the old one.
+    But it is worth saying out loud on every run: the abandoned row is still
+    screened, on whatever price it held the day the rename happened, and nothing
+    else in the pipeline notices.
+    """
+    duplicates = store.duplicate_isins()
+    if not duplicates:
+        return
+    log.warning("%d isin(s) held by more than one company; neither row can be "
+                "matched by isin until reconciled", len(duplicates))
+    for isin, tickers in list(duplicates.items())[:10]:
+        log.warning("   %s: %s", isin, " and ".join(tickers))
+
+
+def _bse_listings_for(day: date, session) -> list:
+    """BSE's rows for the same session, or none if BSE cannot supply them.
+
+    Deliberately swallowing every failure. NSE has already succeeded by this
+    point, so the run has a full set of prices for everything on NSE; letting a
+    BSE outage abort it would trade a complete refresh for no refresh. The
+    warning says which day went unfilled.
+
+    Only the same session is accepted. BSE's own walk-back would happily return
+    Friday for a Monday request, and writing Friday's BSE close under Monday's
+    price_date would be worse than leaving the gap -- the staleness would be
+    invisible.
+    """
+    try:
+        bse_day, bse_payload = bse.latest_bhavcopy(on=day, session=session)
+    except (bse.BseError, requests.RequestException) as exc:
+        log.warning("bse bhavcopy unavailable (%s); pricing from nse alone",
+                    type(exc).__name__)
+        return []
+    if bse_day != day:
+        log.warning("bse has nothing for %s (newest is %s); pricing from nse alone",
+                    day, bse_day)
+        return []
+    rows = bse.parse_bhavcopy(bse_payload)
+    log.info("bse bhavcopy for %s: %d equity listings", bse_day, len(rows))
+    return rows
 
 
 def cmd_export(args) -> int:
