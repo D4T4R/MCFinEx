@@ -1,0 +1,9 @@
+# Single-page app: every path is served by index.html and routed in the browser.
+#
+# 200 rather than 301/302 -- the URL must survive, because /company/ADVANIHOTR is
+# what somebody shares. A redirect would rewrite the address bar to / and lose
+# the company before React ever ran.
+#
+# Last rule only. Cloudflare matches in order, so anything added above this is
+# reachable and anything below it is not.
+/*    /index.html   200

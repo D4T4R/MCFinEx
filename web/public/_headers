@@ -1,0 +1,27 @@
+# Cloudflare Pages response headers.
+
+/*
+  # This page is a public read of a public dataset, so the headers here are
+  # about not being used as a weapon rather than about keeping anything in.
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  # No reason for anything to frame a screener; being framed is how a reader is
+  # shown someone else's numbers under this name.
+  X-Frame-Options: DENY
+  Permissions-Policy: geolocation=(), microphone=(), camera=(), interest-cohort=()
+
+  # connect-src has to list every origin the page fetches from: the published
+  # JSON on GitHub Pages, and Supabase for the account. A missing entry here
+  # fails at runtime in the browser and nowhere else, so it is worth checking
+  # after any change to either.
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://d4t4r.github.io https://*.supabase.co; frame-ancestors 'none'; base-uri 'self'; form-action 'none'
+
+# Vite fingerprints these, so the content at a given name never changes.
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# The entry point is not fingerprinted and points at the fingerprinted bundles,
+# so caching it is how a reader gets yesterday's app pointed at files that have
+# been deleted.
+/index.html
+  Cache-Control: public, max-age=0, must-revalidate

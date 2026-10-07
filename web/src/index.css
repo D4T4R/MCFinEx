@@ -1,0 +1,64 @@
+@import 'tailwindcss';
+
+/*
+ * A data-first palette. The screen is a wall of numbers, so colour is spent on
+ * meaning -- verdicts, tiers, the sign of a change -- and the surface stays
+ * neutral. Anything that colours a figure also carries a shape or a word, so a
+ * reader who cannot distinguish red from green loses nothing.
+ */
+@theme {
+  --color-ink-950: oklch(0.16 0.01 260);
+  --color-ink-900: oklch(0.21 0.012 260);
+  --color-ink-850: oklch(0.26 0.013 260);
+  --color-ink-800: oklch(0.32 0.014 260);
+  --color-ink-600: oklch(0.52 0.015 260);
+  --color-ink-400: oklch(0.70 0.012 260);
+  --color-ink-300: oklch(0.80 0.010 260);
+  --color-ink-200: oklch(0.88 0.008 260);
+  --color-ink-100: oklch(0.93 0.006 260);
+  --color-ink-50: oklch(0.97 0.004 260);
+
+  --color-buy: oklch(0.72 0.16 155);
+  --color-sell: oklch(0.65 0.19 25);
+  --color-hold: oklch(0.78 0.13 85);
+  --color-accent: oklch(0.70 0.15 240);
+}
+
+@layer base {
+  html {
+    color-scheme: dark;
+  }
+  body {
+    @apply bg-ink-950 text-ink-100 antialiased;
+    font-feature-settings: 'tnum' 1; /* tabular figures: columns of numbers align */
+  }
+  /* Numbers in a table must be comparable down the column, not just readable. */
+  .tnum {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@layer components {
+  .panel {
+    @apply rounded-lg border border-ink-800 bg-ink-900;
+  }
+  .chip {
+    @apply inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium;
+  }
+}
+
+/* The table is the primary surface and gets a lot of scrolling. */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-ink-800);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-ink-600);
+}

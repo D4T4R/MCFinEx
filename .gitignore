@@ -27,3 +27,8 @@ __pycache__/
 
 # Holds a live database credential.
 .streamlit/secrets.toml
+
+# The web screener (Vite + React), deployed to Cloudflare Pages.
+/web/node_modules/
+/web/dist/
+/web/.env.local
