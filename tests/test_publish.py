@@ -225,3 +225,103 @@ class TestPublishedSiteAgainstARealDatabase:
         payload = company_payload(make_row(), history.get("ACME", {}))
         assert [t["label"] for t in payload["trends"]] == ["Sales"]
         assert payload["schema"] == SCHEMA
+
+
+class TestScreenPayload:
+    """The web screener's own file.
+
+    Separate from index.json because the fundamentals a chart plots on took that
+    file from 94 KB gzipped to 139 KB -- a 48% rise paid by every phone on mobile
+    data to feed charts only a desktop draws. The app is sideloaded and cannot be
+    force-updated, so holding its payload still is worth more than the bytes.
+    """
+
+    def test_the_phone_app_payload_is_not_widened(self):
+        # The contract that matters most here. An installed build reads
+        # index.json, and no update can be pushed to whoever is holding one.
+        from mcfinex.publish import SCREEN_FIELDS
+
+        payload = index_payload([make_row()], priced="2026-09-30", scraped="2026-08-19")
+        for pick in payload["picks"]:
+            for field in (*SCREEN_FIELDS, "price_to_book"):
+                assert field not in pick, field
+
+    def test_it_covers_the_whole_universe_not_only_the_shortlist(self):
+        from mcfinex.publish import screen_payload
+
+        rows = _one_tiered_one_not()
+        payload = screen_payload(rows)
+        # index.json ranks; this is a cross-section. A scatter drawn with the
+        # untiered companies removed shows the shape of the shortlist while
+        # looking like the shape of the market.
+        assert len(payload["companies"]) == len(rows)
+        assert {c["ticker"] for c in payload["companies"]} == {"TIERED", "UNTIERED"}
+
+    def test_the_two_files_describe_the_same_night(self):
+        from mcfinex.publish import index_payload as idx, screen_payload
+
+        rows = [make_row()]
+        stamp = "2026-09-30T18:00:00Z"
+        a = idx(rows, priced="2026-09-30", scraped="2026-08-19", generated=stamp)
+        b = screen_payload(rows, priced="2026-09-30", scraped="2026-08-19",
+                           generated=stamp)
+        for key in ("generated", "price_date", "last_scraped", "universe", "tiers"):
+            assert a[key] == b[key], key
+
+    def test_pick_fields_cannot_drift_between_the_two(self):
+        # Both go through pick_payload, so a field cannot come to mean one thing
+        # in the app and another on the web.
+        from mcfinex.publish import screen_payload
+
+        rows = [make_row()]
+        in_index = index_payload(rows, priced=None, scraped=None)["picks"][0]
+        in_screen = screen_payload(rows)["companies"][0]
+        for key, value in in_index.items():
+            assert in_screen[key] == value, key
+
+    def test_the_fundamentals_a_chart_needs_are_present(self):
+        from mcfinex.publish import SCREEN_FIELDS, screen_payload
+
+        company = screen_payload([make_row()])["companies"][0]
+        for field in SCREEN_FIELDS:
+            assert field in company, field
+
+    def test_market_cap_reaches_the_payload(self):
+        # It is the context a reader needs most, and until now the screening
+        # pipeline dropped it: Metrics had no such field.
+        from mcfinex.publish import screen_payload
+
+        row = make_row(market_cap=1785744.0)
+        assert screen_payload([row])["companies"][0]["market_cap"] == 1785744.0
+
+    def test_price_to_book_is_derived_once_here_not_in_every_client(self):
+        from mcfinex.publish import screen_payload
+
+        company = screen_payload([make_row(price=100.0, book_value=50.0)])["companies"][0]
+        assert company["price_to_book"] == 2.0
+
+    def test_a_worthless_book_value_does_not_become_an_infinity(self):
+        # A zero or negative book value is common among the companies this screen
+        # flags. Divided in the browser it renders an infinity onto a chart axis
+        # and takes the whole scale with it.
+        from mcfinex.publish import screen_payload
+
+        for book in (0.0, -12.0, None):
+            row = make_row(price=100.0, book_value=book)
+            got = screen_payload([row])["companies"][0]["price_to_book"]
+            assert got is None, (book, got)
+
+    def test_it_serialises_without_nan(self):
+        # allow_nan=False, so a NaN anywhere raises at publish rather than
+        # reaching a client as the token NaN, which JSON.parse rejects.
+        from mcfinex.publish import screen_payload
+
+        json.dumps(screen_payload(_one_tiered_one_not()),
+                   separators=(",", ":"), allow_nan=False)
+
+    def test_the_file_is_written_alongside_the_app_payload(self, tmp_path):
+        from mcfinex.publish import write_site
+
+        write_site(FakeStore(), tmp_path, _one_tiered_one_not())
+        assert (tmp_path / "screen.json").exists()
+        assert (tmp_path / "index.json").exists()

@@ -99,6 +99,12 @@ class Metrics:
     inventory_days_prior: float | None = None
     free_cash_flow: float | None = None
     # Market
+    #: Rupees crore. No signal reads it, deliberately: size is not quality, and
+    #: scoring on it would bias the screen towards large caps. It is carried
+    #: because it is the context a *reader* needs most -- 50% upside on a
+    #: 40-crore shell and on a 40,000-crore company are not the same claim, and
+    #: until now the screen could not say which one it was looking at.
+    market_cap: float | None = None
     stock_pe: float | None = None
     sector_pe: float | None = None
     book_value: float | None = None

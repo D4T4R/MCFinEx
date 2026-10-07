@@ -203,6 +203,65 @@ def index_payload(rows: Sequence, *, priced: str | None, scraped: str | None,
     }
 
 
+#: Fundamentals the web screener plots on, which the phone app has no use for.
+#: Written to a separate file rather than added to ``index.json`` on measurement:
+#: folding them in took that file from 94 KB gzipped to 139 KB, a 48% rise paid by
+#: every phone on mobile data to feed charts only a desktop draws. The app is
+#: sideloaded and cannot be force-updated, so its payload staying still has value
+#: beyond the bytes.
+SCREEN_FIELDS = (
+    "market_cap", "stock_pe", "sector_pe", "roce", "dividend_yield",
+    "book_value", "promoter_holding", "free_cash_flow",
+)
+
+
+def screen_row(row) -> dict[str, Any]:
+    """One company as the web screener reads it: the pick, plus what to plot on.
+
+    Built from the same :func:`pick_payload` the app and the API use, so a field
+    cannot come to mean one thing here and another there.
+    """
+    m = row.metrics
+    pick = picks_module.to_pick(row)
+    return {
+        "id": file_id(pick.ticker),
+        **pick_payload(pick),
+        **{name: money(getattr(m, name)) for name in SCREEN_FIELDS},
+        # Derived here rather than in the browser: price-to-book needs a guard
+        # against a zero or negative book value, and a client that forgets it
+        # renders an infinity on a chart axis and takes the whole scale with it.
+        "price_to_book": money(
+            m.price / m.book_value
+            if m.price and m.book_value and m.book_value > 0 else None),
+        "quarters_reported": m.quarters_reported,
+        "is_financial": m.is_financial,
+    }
+
+
+def screen_payload(rows: Sequence, *, priced: str | None = None,
+                   scraped: str | None = None,
+                   generated: str | None = None) -> dict[str, Any]:
+    """Every screened company with the fundamentals a cross-section needs.
+
+    The whole universe, not only the tiered names. A scatter of ROCE against P/E
+    is a distribution, and showing it with the untiered companies removed would
+    draw the shape of the shortlist while looking like the shape of the market.
+    """
+    base = index_payload(rows, priced=priced, scraped=scraped, generated=generated)
+    return {
+        "schema": SCHEMA,
+        "generated": base["generated"],
+        "price_date": base["price_date"],
+        "last_scraped": base["last_scraped"],
+        "universe": base["universe"],
+        "tiers": base["tiers"],
+        "sectors": base["sectors"],
+        "companies": [screen_row(r) for r in rows],
+        "disclaimer": SHORT_DISCLAIMER,
+        "disclaimer_full": FULL_DISCLAIMER,
+    }
+
+
 @dataclass(frozen=True)
 class Written:
     directory: Path
@@ -244,6 +303,14 @@ def write_site(store, out: Path, rows: Iterable | None = None) -> Written:
 
     payload = index_payload(rows, priced=priced, scraped=scraped)
     total = _dump(out / "index.json", payload)
+
+    # The web screener's own file, generated from the same rows and stamped with
+    # the same `generated` time, so the two cannot disagree about what night they
+    # describe. Separate from index.json so the phone app's payload does not grow
+    # to carry charts it never draws.
+    total += _dump(out / "screen.json",
+                   screen_payload(rows, priced=priced, scraped=scraped,
+                                  generated=payload["generated"]))
 
     wanted = {p["ticker"]: p["id"] for p in payload["picks"]}
     _check_ids(wanted)
