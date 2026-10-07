@@ -18,7 +18,10 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
-ui = ["streamlit>=1.40", "pandas>=2.0"]
+# authlib is what st.login() needs; without it Streamlit raises
+# StreamlitMissingAuthlibError the moment anyone tries to sign in. The
+# floor is 1.42 because that is where native OIDC arrived.
+ui = ["streamlit>=1.42", "pandas>=2.0", "authlib>=1.3.2"]
 api = ["fastapi>=0.115", "uvicorn[standard]>=0.30"]
 postgres = ["psycopg[binary]>=3.1"]
 # FCM HTTP v1 is OAuth2 only -- the legacy server key was switched off in 2024

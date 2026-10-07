@@ -21,7 +21,7 @@ from mcfinex.db.store import Store
 from mcfinex.enrich import enrich
 from mcfinex.picks import Tier
 from mcfinex.report import screen_all
-from mcfinex.ui import NO_DATA, freshness
+from mcfinex.ui import NO_DATA, auth, freshness
 from mcfinex.sources.screener import ScreenerError
 from mcfinex.trends import TREND_LINES, analyse
 from mcfinex.screening import Verdict
@@ -117,8 +117,14 @@ def main() -> None:
 
 
 def _sidebar(frame: pd.DataFrame) -> pd.DataFrame:
+    is_operator = auth.sidebar_identity()
+
     st.sidebar.header("Filters")
-    if st.sidebar.button("Refresh data", width='stretch'):
+    # Operators only, and not for secrecy: clearing the cache makes the next page
+    # load re-screen the whole universe against the hosted database, which on a
+    # free tier is the most expensive thing a visitor can ask for and the easiest
+    # to ask for repeatedly. The data refreshes nightly on its own.
+    if is_operator and st.sidebar.button("Refresh data", width='stretch'):
         st.cache_data.clear()
         st.rerun()
 
@@ -451,8 +457,20 @@ def _enrich_control(ticker: str, row) -> None:
     which changes enterprise value, and the current asset/liability split, which
     is the only way the current ratio can be computed -- so the company is
     re-valued and re-scored straight afterwards.
+
+    Operators only. This writes to the production database and spends requests at
+    screener.in from this project's address, and the page it sits on is public --
+    so for a reader the control is not disabled, it is absent. A greyed-out button
+    advertises something they cannot have and invites them to try.
     """
     already = row.metrics.current_assets is not None
+    if not auth.is_operator():
+        if not already:
+            # Worth saying, because the company page will be missing its current
+            # ratio and a reader would otherwise wonder why.
+            st.caption("Balance-sheet detail has not been fetched for this company yet.")
+        return
+
     label = "Re-fetch balance-sheet detail" if already else "Fetch balance-sheet detail"
     caption = (
         "Cash, current assets and liabilities are loaded; the valuation uses them."

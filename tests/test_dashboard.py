@@ -76,7 +76,21 @@ class TestRenders:
         assert len(app.dataframe) >= 1
 
     def test_download_button_offered(self, app):
-        assert app.button  # refresh + download render as buttons
+        # Asserted on the real element. This used to read `assert app.button`,
+        # which passed on the sidebar's "Refresh data" and would have gone on
+        # passing if the download had vanished entirely -- the name said download
+        # and the assertion covered something else.
+        assert app.download_button
+
+    def test_no_write_control_is_offered_to_a_reader(self, app):
+        # The page is public. "Refresh data" clears the cache, so the next load
+        # re-screens the whole universe against the hosted database -- the most
+        # expensive thing a visitor can ask for and the easiest to repeat. The
+        # enrich control writes to that database and spends requests at
+        # screener.in from this project's address. No operator is signed in under
+        # test, so neither may render.
+        labels = [b.label for b in app.button]
+        assert not [l for l in labels if "Refresh" in l or "balance-sheet" in l], labels
 
     def test_numeric_columns_render_as_numbers_not_format_strings(self, app):
         # Styler.format wants str.format specs; a printf spec like "%.2f" is
@@ -327,3 +341,38 @@ class TestDisclaimerOnTheScreen:
         from mcfinex.disclaimer import CSV_HEADER
 
         assert "\n" not in CSV_HEADER
+
+
+class TestOperatorControls:
+    """The same public page, with an operator signed in.
+
+    Both directions are asserted on purpose. A gate stuck closed would satisfy
+    every test above while making the dashboard useless to the person who owns
+    it, and that failure is as real as the one being guarded against.
+    """
+
+    def _app(self, tmp_path, monkeypatch, *, email):
+        from mcfinex.ui import auth
+
+        db = tmp_path / "ops.db"
+        _seed(db)
+        monkeypatch.setenv("MCFINEX_DB", str(db))
+        monkeypatch.setenv("MCFINEX_DATA_DIR", str(tmp_path))
+        monkeypatch.setattr(auth, "signed_in_email", lambda: email)
+        monkeypatch.setattr(auth, "operators", lambda: frozenset({"you@x.test"}))
+        return AppTest.from_file(APP, default_timeout=60).run()
+
+    def test_refresh_appears_for_an_operator(self, tmp_path, monkeypatch):
+        app = self._app(tmp_path, monkeypatch, email="you@x.test")
+        assert not app.exception
+        assert [b.label for b in app.button if "Refresh" in b.label]
+
+    def test_refresh_stays_hidden_from_a_signed_in_stranger(self, tmp_path, monkeypatch):
+        app = self._app(tmp_path, monkeypatch, email="stranger@x.test")
+        assert not [b.label for b in app.button if "Refresh" in b.label]
+
+    def test_a_stranger_is_told_rather_than_silently_downgraded(self, tmp_path, monkeypatch):
+        # They went out of their way to authenticate; showing them a reader's
+        # view with no explanation reads as the sign-in having failed.
+        app = self._app(tmp_path, monkeypatch, email="stranger@x.test")
+        assert any("not an operator" in c.value for c in app.sidebar.caption)
