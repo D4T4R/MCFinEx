@@ -1,0 +1,24 @@
+{
+  // Static assets only -- there is no `main`, so no Worker code runs. The page
+  // fetches its data straight from GitHub Pages and does everything else in the
+  // browser, so there is nothing for an edge function to do.
+  //
+  // This file exists to stop wrangler guessing. Without it `wrangler deploy`
+  // detects "Framework: Vite", reaches for the Cloudflare Vite plugin, and
+  // refuses because that plugin needs Vite 6 and this project is on 5.4. Naming
+  // the asset directory explicitly skips framework detection entirely -- which
+  // is the right outcome regardless, since nothing here needs the plugin.
+  "name": "mcfinex",
+  "compatibility_date": "2025-01-01",
+
+  "assets": {
+    "directory": "./dist",
+
+    // Client-side routing. /company/ADVANIHOTR exists only in the browser's
+    // router, so without this a reader opening that URL directly -- or sharing
+    // it -- gets a 404 from the edge before React ever loads. "single-page-
+    // application" serves index.html with a 200 and leaves the path alone,
+    // which is what makes the address survive.
+    "not_found_handling": "single-page-application"
+  }
+}

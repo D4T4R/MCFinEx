@@ -61,35 +61,47 @@ bypasses row-level security entirely.
 Without those two variables the sign-in is simply not offered, and the watchlist
 lives in `localStorage` only.
 
-## Cloudflare Pages
+## Cloudflare
 
-Connect the repository once, in the dashboard:
+Deployed as a **Workers static-assets** project. `wrangler.jsonc` declares the
+asset directory and nothing else -- there is no `main`, so no Worker code runs:
+the page fetches its data from GitHub Pages and does the rest in the browser.
+
+That file is also what stops `wrangler deploy` guessing. Without it wrangler
+detects "Framework: Vite", reaches for the Cloudflare Vite plugin, and fails with
+*"The version of Vite used in the project (5.4.21) cannot be automatically
+configured"* -- the plugin wants Vite 6. Naming the asset directory explicitly
+skips framework detection, which is the right outcome anyway since nothing here
+needs that plugin.
 
 | Setting | Value |
 |---|---|
-| Framework preset | None |
-| Build command | `npm run build` |
-| Build output directory | `dist` |
 | Root directory | `web` |
+| Build command | `npm run build` |
+| Deploy command | `npx wrangler deploy` |
+| Production branch | `python-rewrite` |
 | Node version | 22 (set `NODE_VERSION=22` under environment variables) |
+
+`not_found_handling: "single-page-application"` is what keeps
+`/company/ADVANIHOTR` working when it is opened directly or shared: the edge
+serves `index.html` with a 200 and leaves the path for the router. There is
+deliberately no `_redirects` catch-all doing the same job -- two mechanisms for
+one rule is how `/assets/*` ends up rewritten to the index. `public/_headers`
+still applies, and its `connect-src` lists the published-data origin and
+Supabase, so changing either means changing that line.
 
 Then add `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` as environment
 variables for both Production and Preview. Vite inlines `VITE_*` at build time,
 so a value added after a deploy needs a rebuild to take effect — there is no
 runtime config to change.
 
-`public/_redirects` sends every path to `index.html` with a 200, which is what
-keeps `/company/ADVANIHOTR` working when somebody opens it directly rather than
-clicking through. `public/_headers` sets the CSP; its `connect-src` lists the
-published-data origin and Supabase, so changing either means changing that line.
-
 ### Supabase redirect URLs
 
-After the first deploy, add the Pages URL to Supabase under Authentication →
-URL Configuration → Redirect URLs, including the preview pattern:
+After the first deploy, add the deployed URL to Supabase under Authentication →
+URL Configuration → Redirect URLs, including any preview pattern:
 
 ```
-https://<project>.pages.dev/**
+https://<project>.<subdomain>.workers.dev/**
 https://<your-domain>/**
 ```
 
