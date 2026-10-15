@@ -9,11 +9,11 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 
-import { FlagChip, TierChip, VerdictChip } from '../components/Chips';
+import { BoardChip, FlagChip, TierChip, VerdictChip } from '../components/Chips';
 import { Chart } from '../components/Chart';
 import { loadCompany } from '../data/remote';
 import { money, percent, plain } from '../lib/format';
-import { TIER_HELP, type Company, type CompanyDetail, type Trend } from '../types';
+import { TIER_HELP, type Company, type CompanyDetail, type Listed, type Trend } from '../types';
 
 function TrendChart({ trend }: { trend: Trend }) {
   const option = {
@@ -100,9 +100,15 @@ function Figure({ label, value, hint }: { label: string; value: string; hint?: s
  * screen payload already in memory, and only the signal breakdown and the
  * quarterly history are missing. Saying so beats a 404.
  */
-export function CompanyPage({ byId }: { byId: Map<string, Company> }) {
+export function CompanyPage({
+  byId, listedById,
+}: {
+  byId: Map<string, Company>;
+  listedById: Map<string, Listed>;
+}) {
   const { id } = useParams<{ id: string }>();
   const summary = id ? byId.get(id) : undefined;
+  const listed = id && !summary ? listedById.get(id) : undefined;
   const [detail, setDetail] = useState<CompanyDetail | null>(null);
   const [error, setError] = useState<Error | null>(null);
 
@@ -120,6 +126,49 @@ export function CompanyPage({ byId }: { byId: Map<string, Company> }) {
   // Whichever source has it. The detail file is richer, the screen payload is
   // always there.
   const head = detail ?? summary;
+
+  // Listed, priced, never screened. A real company we do not cover -- which is
+  // a different answer from "no such company", and the whole reason the payload
+  // carries this list at all.
+  if (!head && listed) {
+    return (
+      <div className="space-y-4">
+        <div className="panel p-5">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-3">
+                <h1 className="text-xl font-semibold text-ink-50">{listed.ticker}</h1>
+                <BoardChip board={listed.board} />
+              </div>
+              <p className="mt-0.5 text-sm text-ink-400">{listed.name}</p>
+            </div>
+            <Link to="/" className="text-sm text-ink-400 hover:text-accent">
+              ← Screener
+            </Link>
+          </div>
+          <dl className="mt-5 grid grid-cols-2 gap-5 sm:grid-cols-3">
+            <Figure label="Price" value={money(listed.price)} />
+          </dl>
+        </div>
+        <div className="panel p-4">
+          <h2 className="text-sm font-medium text-ink-200">Not screened</h2>
+          <p className="mt-1.5 max-w-2xl text-sm text-ink-400">
+            {listed.board === 'SME'
+              ? 'This is an SME-platform company. The price is refreshed every '
+                + 'night, but its financials are not fetched automatically \u2014 the '
+                + 'board is large and its filings are lighter, so they are '
+                + 'collected on request instead.'
+              : 'The price is refreshed every night, but financials for this '
+                + 'company have not been collected yet.'}
+          </p>
+          <p className="mt-2 max-w-2xl text-xs text-ink-600">
+            Without them there are no signals, no valuation and no tier \u2014 so it
+            does not appear in the screen or the charts.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   if (!head) {
     return (
@@ -145,6 +194,7 @@ export function CompanyPage({ byId }: { byId: Map<string, Company> }) {
             <div className="flex items-center gap-3">
               <h1 className="text-xl font-semibold text-ink-50">{head.ticker}</h1>
               <TierChip tier={head.tier} title={TIER_HELP[head.tier]} />
+              <BoardChip board={head.board} />
             </div>
             <p className="mt-0.5 text-sm text-ink-400">
               {head.name}

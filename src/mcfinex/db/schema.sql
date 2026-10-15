@@ -29,6 +29,10 @@ CREATE TABLE IF NOT EXISTS companies (
     -- the nearest rupee, so `mcfinex prices` overwrites it with the exact NSE
     -- close and records which session that was.
     price_date            TEXT,
+    -- Which board the company trades on: Main or SME. Stored rather than
+    -- re-derived, because the series code it comes from is only in the
+    -- bhavcopy, and the screen is published long after that file is read.
+    board                 TEXT,
     consolidated          INTEGER NOT NULL DEFAULT 0,
     scan_for_results      TEXT    NOT NULL DEFAULT 'Y',
     last_updated          TEXT,   -- ISO date of the last successful scrape

@@ -53,6 +53,8 @@ def _build_parser() -> argparse.ArgumentParser:
                         "illiquid stocks that did not trade)")
     p.add_argument("--no-bse", action="store_true",
                    help="NSE only; skip the BSE main board")
+    p.add_argument("--no-sme", action="store_true",
+                   help="skip the NSE SME board (seeded for prices, not scraped)")
     p.add_argument("--no-renames", action="store_true",
                    help="do not follow symbol changes (leaves a renamed company "
                         "forked into two rows; see `mcfinex renames`)")
@@ -170,10 +172,14 @@ def cmd_universe(args) -> int:
             _apply_renames(store, listings, args, session)
 
         store.upsert_companies(
-            ((l.ticker, {"isin": l.isin, "current_price": l.close}) for l in listings),
-            ("isin", "current_price"),
+            ((l.ticker, {"isin": l.isin, "current_price": l.close,
+                         "board": "Main"}) for l in listings),
+            ("isin", "current_price", "board"),
         )
         seeded = len(listings)
+
+        if not args.no_sme:
+            seeded += _seed_nse_sme(store, listings, args, session)
 
         if not args.no_bse:
             added = _seed_bse_main_board(store, listings, args, session)
@@ -237,6 +243,49 @@ def _apply_renames(store, listings, args, session) -> int:
     return applied
 
 
+def _seed_nse_sme(store, main_board, args, session) -> int:
+    """Seed the NSE SME board for prices, but not for scraping.
+
+    These companies get a closing price every night and nothing else. They are
+    flagged scan_for_results = 'N', which keeps them out of `unscraped_tickers`
+    and therefore out of the nightly scrape -- financials come only when
+    somebody asks for a specific one.
+
+    That is a judgement about attention rather than quality. 454 companies would
+    be about 17 minutes of scraping a night and roughly two hours of enrichment,
+    spent on a board whose filings are thin; but their median turnover is seven
+    times that of the BSE-only names already tracked, so excluding them outright
+    was never defensible either.
+    """
+    try:
+        listings, sessions = nse.universe(days=args.days, session=session,
+                                          series=nse.SME_SERIES)
+    except (nse.NseError, requests.RequestException) as exc:
+        log.warning("nse sme unavailable (%s); seeded the main board alone",
+                    type(exc).__name__)
+        return 0
+
+    known = store.known_isins() | {l.isin for l in main_board if l.isin}
+    fresh = prices.new_listings(known, listings)
+    log.info("nse sme: %d listings across %d sessions, %d not already tracked",
+             len(listings), len(sessions), len(fresh))
+    if args.limit:
+        fresh = fresh[: args.limit]
+    if not fresh:
+        return 0
+
+    store.upsert_companies(
+        ((l.ticker, {"isin": l.isin, "current_price": l.close,
+                     "name": l.name or None, "scan_for_results": "N",
+                     "board": "SME"})
+         for l in fresh),
+        ("isin", "current_price", "name", "scan_for_results", "board"),
+    )
+    log.info("seeded %d sme companies for prices only, e.g. %s", len(fresh),
+             ", ".join(l.ticker for l in fresh[:5]))
+    return len(fresh)
+
+
 def _seed_bse_main_board(store, nse_listings, args, session) -> int:
     """Add BSE main-board companies that NSE does not list.
 
@@ -292,8 +341,8 @@ def _seed_bse_main_board(store, nse_listings, args, session) -> int:
     store.upsert_companies(
         ((l.ticker, {"isin": l.isin, "current_price": l.close,
                      "company_id": _scrip_code(l.security_id),
-                     "name": l.name or None}) for l in fresh),
-        ("isin", "current_price", "company_id", "name"),
+                     "name": l.name or None, "board": "Main"}) for l in fresh),
+        ("isin", "current_price", "company_id", "name", "board"),
     )
     missing = [l.ticker for l in fresh if _scrip_code(l.security_id) is None]
     if missing:
@@ -689,7 +738,10 @@ def cmd_prices(args) -> int:
     """
     session = requests.Session()
     day, payload = nse.latest_bhavcopy(session=session)
-    listings = nse.parse_bhavcopy(payload)
+    # Every board, not just the main one: a company we hold a row for should be
+    # priced regardless of why we hold it, and the SME names are seeded for
+    # exactly this -- a current price without financials.
+    listings = nse.parse_bhavcopy(payload, series=nse.ALL_EQUITY_SERIES)
     log.info("nse bhavcopy for %s: %d equity listings", day, len(listings))
 
     extra: list = []

@@ -27,7 +27,8 @@ log = logging.getLogger(__name__)
 # but callers and tests have imported them from here since before there was a
 # second exchange.
 __all__ = [
-    "BHAVCOPY_URL", "EQUITY_SERIES", "FUND_ISIN_PREFIX", "Listing", "NseError",
+    "ALL_EQUITY_SERIES", "BHAVCOPY_URL", "EQUITY_SERIES", "FUND_ISIN_PREFIX",
+    "Listing", "NseError", "SME_SERIES",
     "fetch_bhavcopy", "latest_bhavcopy", "parse_bhavcopy", "universe",
 ]
 
@@ -42,10 +43,26 @@ USER_AGENT = (
     "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
 )
 
-# Only ordinary equity. GB is sovereign gold bonds, and the rest are debt and
-# other instruments that have no company page on screener. BSE uses a completely
+# The main board. GB is sovereign gold bonds, and the rest are debt and other
+# instruments that have no company page on screener. BSE uses a completely
 # different vocabulary in the same column -- see mcfinex.sources.bse.
 EQUITY_SERIES = frozenset({"EQ", "BE"})
+
+#: The SME platform: SM, and ST for the trade-to-trade names on it.
+#:
+#: Held apart from the main board rather than folded into it, because the two
+#: are treated differently downstream -- SME companies are priced every night
+#: but not scraped on sight. 454 of them as of 2026-10-15, and they are not the
+#: illiquid tail that assumption would suggest: median turnover on the day was
+#: Rs 11.4 lakh against Rs 1.5 lakh for the BSE-only listings already tracked.
+#: Excluding them was never a decision, it was a filter written when NSE main
+#: board was the only source.
+SME_SERIES = frozenset({"SM", "ST"})
+
+#: Everything that is a company's ordinary shares, whichever board it trades on.
+#: What `prices` reads, because a stock we hold a row for should be priced
+#: regardless of why we hold it.
+ALL_EQUITY_SERIES = EQUITY_SERIES | SME_SERIES
 
 
 class NseError(RuntimeError):
@@ -137,7 +154,8 @@ def latest_bhavcopy(*, on: date | None = None, max_lookback: int = 10,
 
 
 def universe(*, days: int = 7, on: date | None = None,
-             session: requests.Session | None = None) -> tuple[list[Listing], list[date]]:
+             session: requests.Session | None = None,
+             series: frozenset[str] = EQUITY_SERIES) -> tuple[list[Listing], list[date]]:
     """The traded universe, unioned over the last ``days`` trading sessions.
 
     A bhavcopy only lists instruments that actually traded that day, so any
@@ -160,21 +178,26 @@ def universe(*, days: int = 7, on: date | None = None,
         if payload is None:
             continue
         sessions.append(day)
-        for listing in parse_bhavcopy(payload):
+        for listing in parse_bhavcopy(payload, series=series):
             found.setdefault(listing.ticker, listing)
     if not sessions:
         raise NseError(f"no bhavcopy found in the {days * 2} days before {start}")
     return sorted(found.values(), key=lambda l: l.ticker), sessions
 
 
-def parse_bhavcopy(payload: bytes) -> list[Listing]:
-    """Extract the equity rows from a bhavcopy ZIP."""
+def parse_bhavcopy(payload: bytes, *,
+                   series: frozenset[str] = EQUITY_SERIES) -> list[Listing]:
+    """Extract the equity rows from a bhavcopy ZIP.
+
+    Defaults to the main board, so every caller that predates the SME platform
+    keeps the universe it had. Pass ``ALL_EQUITY_SERIES`` to include SME.
+    """
     with zipfile.ZipFile(io.BytesIO(payload)) as archive:
         names = [n for n in archive.namelist() if n.lower().endswith(".csv")]
         if not names:
             raise NseError("bhavcopy archive contains no CSV")
         text = archive.read(names[0]).decode("utf-8-sig")
-    return parse_udiff(text, series=EQUITY_SERIES, exchange=EXCHANGE)
+    return parse_udiff(text, series=series, exchange=EXCHANGE)
 
 
 #: Kept as a private alias: tests and older callers reached for it directly.

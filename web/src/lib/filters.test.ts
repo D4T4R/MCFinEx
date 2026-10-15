@@ -25,7 +25,7 @@ function company(overrides: Partial<Company> = {}): Company {
     market_cap: 25000, stock_pe: 12, sector_pe: 20, roce: 22,
     dividend_yield: 2, book_value: 50, price_to_book: 2,
     promoter_holding: 60, free_cash_flow: 10,
-    quarters_reported: 12, is_financial: false,
+    quarters_reported: 12, is_financial: false, board: 'Main',
     ...overrides,
   };
 }

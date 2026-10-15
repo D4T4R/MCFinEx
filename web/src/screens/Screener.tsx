@@ -10,7 +10,7 @@ import { useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useVirtualizer } from '@tanstack/react-virtual';
 
-import { SignalCount, TierChip } from '../components/Chips';
+import { BoardChip, SignalCount, TierChip } from '../components/Chips';
 import { count, crore, money, percent, plain } from '../lib/format';
 import type { Company } from '../types';
 
@@ -43,8 +43,15 @@ const COLUMNS: Column[] = [
     render: (c) => <span className="truncate text-ink-300">{c.name ?? '—'}</span>,
   },
   {
-    key: 'tier', label: 'Tier', width: 'w-40',
-    render: (c) => <TierChip tier={c.tier} />,
+    key: 'tier', label: 'Tier', width: 'w-52',
+    render: (c) => (
+      <span className="flex items-center gap-1">
+        <TierChip tier={c.tier} />
+        {/* Only when it is SME. Marking the 2,500 main-board rows would be
+            noise on every line to flag the exception. */}
+        {c.board === 'SME' && <BoardChip board={c.board} />}
+      </span>
+    ),
   },
   {
     key: 'market_cap', label: 'Mkt cap', width: 'w-28', align: 'right', sortable: true,
@@ -159,7 +166,7 @@ export function Screener({
   return (
     <div className="panel overflow-hidden">
      <div className="overflow-x-auto">
-      <div className="flex min-w-[1180px] items-center gap-2 border-b border-ink-800 px-3 py-2 text-[11px] font-medium uppercase tracking-wide text-ink-600">
+      <div className="flex min-w-[1260px] items-center gap-2 border-b border-ink-800 px-3 py-2 text-[11px] font-medium uppercase tracking-wide text-ink-600">
         <span className="w-7" />
         {COLUMNS.map((col) => {
           const active = col.sortable && col.key === sortKey;
@@ -193,7 +200,7 @@ export function Screener({
               return (
                 <div
                   key={company.id}
-                  className="absolute left-0 flex w-full min-w-[1180px] items-center gap-2 border-b border-ink-900 px-3 text-sm hover:bg-ink-850/60"
+                  className="absolute left-0 flex w-full min-w-[1260px] items-center gap-2 border-b border-ink-900 px-3 text-sm hover:bg-ink-850/60"
                   style={{ height: item.size, top: item.start }}
                 >
                   <button

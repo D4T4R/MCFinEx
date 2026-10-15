@@ -77,6 +77,12 @@ export default function App() {
   // every company is already in memory, including the 975 with no detail file.
   const byId = useMemo(
     () => new Map(companies.map((c) => [c.id, c])), [companies]);
+  // Listed but not screened, keyed the same way so a company page can tell
+  // "we do not cover this" from "no such company".
+  const listedById = useMemo(
+    () => new Map((payload?.listed ?? []).map((l) => [l.ticker, l])),
+    [payload],
+  );
   const visible = useMemo(
     () => apply(companies, filters, watchlist.ids),
     [companies, filters, watchlist.ids],
@@ -170,7 +176,7 @@ export default function App() {
           path="/company/:id"
           element={
             <Suspense fallback={<Loading />}>
-              <CompanyPage byId={byId} />
+              <CompanyPage byId={byId} listedById={listedById} />
             </Suspense>
           }
         />

@@ -25,7 +25,7 @@ COMPANY_COLUMNS = (
     "market_cap", "current_price", "book_value", "stock_pe", "industry_pe",
     "dividend_yield", "roce", "roe", "outstanding_shares", "consolidated",
     "scan_for_results", "last_updated", "last_updated_quarter", "latest_period",
-    "price_date",
+    "price_date", "board",
 )
 
 
@@ -171,7 +171,8 @@ class Store:
         re-scrape of everything.
         """
         existing = self._company_columns()
-        for column, ddl in (("price_date", "TEXT"), ("company_id", "INTEGER")):
+        for column, ddl in (("price_date", "TEXT"), ("company_id", "INTEGER"),
+                            ("board", "TEXT")):
             if column not in existing:
                 self.conn.execute(f"ALTER TABLE companies ADD COLUMN {column} {ddl}")
 
@@ -295,11 +296,18 @@ class Store:
         is not screened -- screening needs financials -- so it is invisible in
         the app until this backlog drains. New listings arrive here.
 
+        **Skips rows flagged scan_for_results = 'N'.** That is what makes the SME
+        board priced-but-not-screened mean anything: 454 companies seeded without
+        it would be drained by `scrape --missing 100` inside a week, and the
+        on-request route they exist for would never be used. A request flips the
+        flag; nothing else does.
+
         One query rather than `needs_refresh` per company: `scrape --all` walks
         every stored ticker asking individually, which against a hosted database
         is some 2,600 round trips before a single page is fetched.
         """
-        sql = ("SELECT ticker FROM companies WHERE last_updated IS NULL "
+        sql = ("SELECT ticker FROM companies "
+               "WHERE last_updated IS NULL AND scan_for_results = 'Y' "
                "ORDER BY ticker")
         params: list[Any] = []
         if limit is not None:
@@ -600,6 +608,39 @@ class Store:
                 "SELECT * FROM companies WHERE last_updated IS NOT NULL ORDER BY ticker"
             )
         }
+
+    def listed_not_screened(self) -> list[dict[str, Any]]:
+        """Rows that carry a price but no financials.
+
+        What the web screener needs to tell a reader "this company exists and we
+        do not cover it" rather than "no such company". The two look identical
+        from a search box, and only one of them is the screen's fault.
+        """
+        return [
+            {"ticker": r["ticker"], "name": r["name"], "price": r["current_price"],
+             "board": r["board"], "on_request": r["scan_for_results"] == "N"}
+            for r in self.conn.execute(
+                "SELECT ticker, name, current_price, scan_for_results, board FROM companies "
+                "WHERE last_updated IS NULL ORDER BY ticker"
+            )
+        ]
+
+    def mark_for_scraping(self, tickers: Sequence[str]) -> int:
+        """Let the next scrape pick these up.
+
+        The one thing that moves a company off the priced-only list. Deliberately
+        narrow: it flips the flag and nothing else, so a request cannot become a
+        way to alter any other column.
+        """
+        if not tickers:
+            return 0
+        with self.conn:
+            cursor = self.conn.executemany(
+                "UPDATE companies SET scan_for_results = 'Y' "
+                "WHERE ticker = ? AND last_updated IS NULL",
+                [(t,) for t in tickers],
+            )
+        return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
 
     def tickers_by_isin(self) -> dict[str, str]:
         """ISIN to stored ticker, for matching a second exchange to a company.

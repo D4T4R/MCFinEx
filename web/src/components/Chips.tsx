@@ -6,7 +6,7 @@
  * screen leans on three of them at once.
  */
 
-import type { Tier, Verdict } from '../types';
+import type { Board, Tier, Verdict } from '../types';
 
 const TIER_STYLE: Record<Tier, string> = {
   'High conviction': 'bg-buy/15 text-buy ring-1 ring-buy/30',
@@ -58,6 +58,30 @@ export function SignalCount({ buys, scored }: { buys: number; scored: number }) 
     <span className="tnum whitespace-nowrap">
       <span className={tone}>{buys}</span>
       <span className="text-ink-600">/{scored}</span>
+    </span>
+  );
+}
+
+const BOARD_STYLE: Record<Board, string> = {
+  // Muted on purpose. The board is context, not a verdict -- it should not
+  // compete with the tier chip beside it, which is the actual judgement.
+  Main: 'bg-ink-850 text-ink-300 ring-1 ring-ink-600',
+  SME: 'bg-accent/10 text-accent ring-1 ring-accent/30',
+};
+
+const BOARD_HELP: Record<Board, string> = {
+  Main: 'Main board of the exchange.',
+  SME: 'SME platform. Smaller companies with lighter disclosure requirements, '
+     + 'so every figure here rests on less.',
+};
+
+export function BoardChip({ board }: { board: Board | null }) {
+  // Nothing at all rather than "unknown": an absent board is a gap in our data,
+  // not a fact about the company, and a chip saying so would read as one.
+  if (!board) return null;
+  return (
+    <span className={`chip ${BOARD_STYLE[board]}`} title={BOARD_HELP[board]}>
+      {board}
     </span>
   );
 }

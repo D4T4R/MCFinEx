@@ -529,3 +529,64 @@ class TestBackfillingTheName:
             assert stored["company_id"] == 542012
             assert not same_company(stored["name"], "Bikaji Foods International Ltd")
             assert same_company(stored["name"], "A-1 Ltd")
+
+
+class TestPricedButNotScreened:
+    """The SME board: a closing price every night, financials only on request.
+
+    The flag is what makes that distinction hold. 454 SME companies seeded
+    without it would be drained by `scrape --missing 100` inside a week, and the
+    on-request route they exist for would never once be used -- the feature
+    would look implemented and never run.
+    """
+
+    def test_a_flagged_company_is_not_offered_to_the_nightly_scrape(self, tmp_path):
+        with Store(tmp_path / "s.db") as store:
+            store.create_schema()
+            store.upsert_company("DELAPLEX", {"isin": "INE0SK801018", "board": "SME",
+                                              "scan_for_results": "N"})
+            store.upsert_company("NEWMAIN", {"isin": "INE111A01011", "board": "Main"})
+            assert store.unscraped_tickers() == ["NEWMAIN"]
+
+    def test_requesting_one_puts_it_in_the_queue(self, tmp_path):
+        with Store(tmp_path / "s.db") as store:
+            store.create_schema()
+            store.upsert_company("DELAPLEX", {"isin": "INE0SK801018", "board": "SME",
+                                              "scan_for_results": "N"})
+            assert store.mark_for_scraping(["DELAPLEX"]) == 1
+            assert store.unscraped_tickers() == ["DELAPLEX"]
+
+    def test_requesting_an_already_scraped_company_changes_nothing(self, tmp_path):
+        # It has its financials. Flipping the flag would re-queue work that has
+        # already been done, which on a weekly quota is a request wasted.
+        with Store(tmp_path / "s.db") as store:
+            store.create_schema()
+            store.upsert_company("DONE", {"isin": "INE1", "scan_for_results": "N",
+                                          "last_updated": "2026-10-01"})
+            assert store.mark_for_scraping(["DONE"]) == 0
+
+    def test_the_not_screened_list_carries_what_the_app_needs(self, tmp_path):
+        with Store(tmp_path / "s.db") as store:
+            store.create_schema()
+            store.upsert_company("DELAPLEX", {"isin": "INE0SK801018", "name": "Delaplex Ltd",
+                                              "board": "SME", "scan_for_results": "N",
+                                              "current_price": 163.7})
+            store.upsert_company("SCRAPED", {"isin": "INE2", "board": "Main",
+                                             "last_updated": "2026-10-01"})
+            listed = store.listed_not_screened()
+        assert [l["ticker"] for l in listed] == ["DELAPLEX"]
+        assert listed[0] == {"ticker": "DELAPLEX", "name": "Delaplex Ltd",
+                             "price": 163.7, "board": "SME", "on_request": True}
+
+    def test_a_main_board_company_awaiting_its_first_scrape_is_not_on_request(self, tmp_path):
+        # Same list, different reason: it is queued, not withheld. The app says
+        # something different for each.
+        with Store(tmp_path / "s.db") as store:
+            store.create_schema()
+            store.upsert_company("NEWLISTING", {"isin": "INE3", "board": "Main"})
+            assert store.listed_not_screened()[0]["on_request"] is False
+
+    def test_an_empty_request_is_not_an_error(self, tmp_path):
+        with Store(tmp_path / "s.db") as store:
+            store.create_schema()
+            assert store.mark_for_scraping([]) == 0

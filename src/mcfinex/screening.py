@@ -87,6 +87,10 @@ class Metrics:
     ticker: str
     name: str | None = None
     sector: str | None = None
+    #: "Main" or "SME". No signal reads it -- the board a company trades on says
+    #: nothing about the business -- but it changes how a reader should weigh
+    #: everything else, so it travels with the screen rather than being looked up.
+    board: str | None = None
     price: float | None = None
     # Balance sheet
     reserves: float | None = None

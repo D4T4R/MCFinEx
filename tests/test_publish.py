@@ -133,8 +133,9 @@ class TestIndexPayload:
 class FakeStore:
     """Enough Store for write_site: freshness and bulk trend history."""
 
-    def __init__(self, histories=None):
+    def __init__(self, histories=None, listed=None):
         self.histories = histories or {}
+        self.listed = listed or []
         self.asked_for = None
 
     def data_freshness(self):
@@ -143,6 +144,11 @@ class FakeStore:
     def all_quarterly_history(self, labels):
         self.asked_for = list(labels)
         return self.histories
+
+    def listed_not_screened(self):
+        # Companies carrying a price but no financials. Empty by default: the
+        # tests that care about them supply their own.
+        return self.listed
 
 
 class TestWriteSite:

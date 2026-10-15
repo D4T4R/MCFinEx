@@ -160,6 +160,7 @@ def company_payload(row, histories: Mapping[str, list[tuple[str, float]]]) -> di
             "pe_yearly": money(row.target_pe_yearly),
             "pe_quarterly": money(row.target_pe_quarterly),
         },
+        "board": row.metrics.board,
         "signals": [signal_payload(s) for s in row.screening.signals],
         "trends": trends_for(histories),
         "disclaimer": SHORT_DISCLAIMER,
@@ -235,12 +236,14 @@ def screen_row(row) -> dict[str, Any]:
             if m.price and m.book_value and m.book_value > 0 else None),
         "quarters_reported": m.quarters_reported,
         "is_financial": m.is_financial,
+        "board": m.board,
     }
 
 
 def screen_payload(rows: Sequence, *, priced: str | None = None,
                    scraped: str | None = None,
-                   generated: str | None = None) -> dict[str, Any]:
+                   generated: str | None = None,
+                   listed: Sequence[Mapping[str, Any]] = ()) -> dict[str, Any]:
     """Every screened company with the fundamentals a cross-section needs.
 
     The whole universe, not only the tiered names. A scatter of ROCE against P/E
@@ -248,6 +251,11 @@ def screen_payload(rows: Sequence, *, priced: str | None = None,
     draw the shape of the shortlist while looking like the shape of the market.
     """
     base = index_payload(rows, priced=priced, scraped=scraped, generated=generated)
+    listed = [
+        {"ticker": r["ticker"], "name": r["name"], "board": r.get("board"),
+         "price": money(r["price"]), "on_request": bool(r["on_request"])}
+        for r in listed
+    ]
     return {
         "schema": SCHEMA,
         "generated": base["generated"],
@@ -257,6 +265,11 @@ def screen_payload(rows: Sequence, *, priced: str | None = None,
         "tiers": base["tiers"],
         "sectors": base["sectors"],
         "companies": [screen_row(r) for r in rows],
+        # Listed, priced, not screened. Published so a reader searching for a
+        # company the screen does not cover is told that, rather than being
+        # shown the same blank as a typo. The two are indistinguishable from a
+        # search box and only one of them is the screen's doing.
+        "listed": listed,
         "disclaimer": SHORT_DISCLAIMER,
         "disclaimer_full": FULL_DISCLAIMER,
     }
@@ -310,7 +323,8 @@ def write_site(store, out: Path, rows: Iterable | None = None) -> Written:
     # to carry charts it never draws.
     total += _dump(out / "screen.json",
                    screen_payload(rows, priced=priced, scraped=scraped,
-                                  generated=payload["generated"]))
+                                  generated=payload["generated"],
+                                  listed=store.listed_not_screened()))
 
     wanted = {p["ticker"]: p["id"] for p in payload["picks"]}
     _check_ids(wanted)

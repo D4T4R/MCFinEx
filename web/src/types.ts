@@ -37,6 +37,25 @@ export const TIER_HELP: Record<Tier, string> = {
   None: 'Did not qualify for a shortlist.',
 };
 
+/** Which board a company trades on. Not a quality judgement; a context one. */
+export type Board = 'Main' | 'SME';
+
+/**
+ * Listed and priced, but not screened.
+ *
+ * Published so a reader searching for a company the screen does not cover is
+ * told that, rather than shown the same blank as a typo. The two are
+ * indistinguishable from a search box and only one is the screen's doing.
+ */
+export interface Listed {
+  ticker: string;
+  name: string | null;
+  board: Board | null;
+  price: number | null;
+  /** Financials come only when somebody asks for this company specifically. */
+  on_request: boolean;
+}
+
 export interface Company {
   /** Filename stem; differs from `ticker` where a ticker contains `&`. */
   id: string;
@@ -74,6 +93,7 @@ export interface Company {
 
   quarters_reported: number;
   is_financial: boolean;
+  board: Board | null;
 }
 
 export interface SectorHeat {
@@ -94,6 +114,7 @@ export interface ScreenPayload {
   tiers: Partial<Record<Tier, number>>;
   sectors: SectorHeat[];
   companies: Company[];
+  listed: Listed[];
   disclaimer: string;
   disclaimer_full: string;
 }
@@ -142,6 +163,7 @@ export interface CompanyDetail {
   name: string | null;
   sector: string | null;
   tier: Tier;
+  board: Board | null;
   price: number | null;
   target: number | null;
   entry_3by4: number | null;

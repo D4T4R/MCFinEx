@@ -75,6 +75,11 @@ class Listing:
     #: listed on NSE. NSE's column holds an internal token meaningless elsewhere,
     #: so it is deliberately left empty rather than stored and later trusted.
     security_id: str | None = None
+    #: The exchange's own series or group code, as published. Carried because
+    #: the seeder treats some of them differently -- NSE's SME board is priced
+    #: nightly but not scraped on sight -- and reading it off the feed beats
+    #: re-deriving it from a ticker later.
+    series: str = ""
 
 
 def parse_udiff(text: str, *, series: frozenset[str], exchange: str = "",
@@ -90,7 +95,8 @@ def parse_udiff(text: str, *, series: frozenset[str], exchange: str = "",
     """
     listings: list[Listing] = []
     for row in csv.DictReader(io.StringIO(text)):
-        if (row.get("SctySrs") or "").strip().upper() not in series:
+        code = (row.get("SctySrs") or "").strip().upper()
+        if code not in series:
             continue
         ticker = (row.get("TckrSymb") or "").strip().upper()
         isin = (row.get("ISIN") or "").strip()
@@ -112,6 +118,7 @@ def parse_udiff(text: str, *, series: frozenset[str], exchange: str = "",
                 close=to_float(row.get("ClsPric")),
                 exchange=exchange,
                 security_id=security_id,
+                series=code,
             )
         )
     return listings
