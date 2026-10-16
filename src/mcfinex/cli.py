@@ -96,6 +96,13 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-bse", action="store_true", help="NSE only")
     p.set_defaults(handler=cmd_renames)
 
+    p = sub.add_parser("requests", help="hand reader-requested companies to the scraper")
+    p.add_argument("--limit", type=int, default=20,
+                   help="never promote more than this many in one run")
+    p.add_argument("--dry-run", action="store_true",
+                   help="list the queue without touching it")
+    p.set_defaults(handler=cmd_requests)
+
     p = sub.add_parser("prune", help="remove ETFs and fund units that are not companies")
     p.add_argument("--apply", action="store_true", help="actually delete; default lists only")
     p.set_defaults(handler=cmd_prune)
@@ -586,6 +593,53 @@ def cmd_renames(args) -> int:
             log.info("renamed %s to %s", r.old, r.new)
 
     print(f"\nApplied {len(renames)} rename(s).")
+    return 0
+
+
+def cmd_requests(args) -> int:
+    """Promote queued requests into the scrape backlog.
+
+    Readers can ask for a company the screen does not cover -- the SME board is
+    priced nightly but not scraped, so its financials come only when somebody
+    wants them. This flips `scan_for_results` so the next `scrape --missing`
+    picks the company up, and records that it did.
+
+    Two separate limits, and they do different jobs. The per-account quota of
+    two a week lives in the database policy and is about fairness; anyone can
+    register another Google account, so it bounds nobody's total. `--limit` is
+    what actually bounds this job: at 2.3s a company it decides how much of the
+    night the queue can consume, however many people asked.
+
+    Runs before `scrape --missing` in the nightly, because promoting a company
+    after the scrape has already chosen its batch buys it another day's wait.
+    """
+    with Store(args.db) as store:
+        store.create_schema()
+        queued = store.pending_requests(limit=args.limit)
+        outstanding = len(store.pending_requests())
+        if not queued:
+            log.info("no companies requested")
+            return 0
+
+        log.info("%d requested, taking %d", outstanding, len(queued))
+        for item in queued:
+            print(f"  {item['ticker']:<14} requested {item['requested_at']}")
+
+        if args.dry_run:
+            print(f"\n{len(queued)} would be handed to the scraper. Nothing changed.")
+            return 0
+
+        # Only companies we actually hold a row for. A request naming something
+        # that was since delisted, or never existed, must not sit in the queue
+        # being retried -- it is promoted either way, and the reader is told by
+        # the company simply never gaining financials.
+        promoted = store.mark_for_scraping([i["ticker"] for i in queued])
+        store.mark_requests_promoted([i["id"] for i in queued])
+        log.info("flagged %d company(ies) for the next scrape", promoted)
+        if promoted < len(queued):
+            log.warning("%d request(s) named a company that is already scraped or "
+                        "not tracked; cleared from the queue either way",
+                        len(queued) - promoted)
     return 0
 
 

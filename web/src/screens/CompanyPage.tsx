@@ -13,6 +13,8 @@ import { BoardChip, FlagChip, TierChip, VerdictChip } from '../components/Chips'
 import { Chart } from '../components/Chart';
 import { loadCompany } from '../data/remote';
 import { money, percent, plain } from '../lib/format';
+import { WEEKLY_QUOTA, type RequestState } from '../lib/useRequests';
+import { authConfigured } from '../lib/supabase';
 import { TIER_HELP, type Company, type CompanyDetail, type Listed, type Trend } from '../types';
 
 function TrendChart({ trend }: { trend: Trend }) {
@@ -83,6 +85,64 @@ function TrendChart({ trend }: { trend: Trend }) {
   );
 }
 
+/**
+ * Asking for this company's financials.
+ *
+ * Says when, not just whether. The nightly job collects these, so a request
+ * answered at once would be a promise nothing here can keep -- and a reader who
+ * expects numbers immediately reads the unchanged page as a failure.
+ */
+function RequestControl({
+  ticker, requests, signedIn,
+}: {
+  ticker: string;
+  requests: RequestState;
+  signedIn: boolean;
+}) {
+  if (!signedIn) {
+    return (
+      <p className="text-xs text-ink-600">
+        Sign in to ask for this company\u2019s financials. They are collected
+        overnight, {WEEKLY_QUOTA} companies a week per account.
+      </p>
+    );
+  }
+
+  if (requests.pending.has(ticker)) {
+    return (
+      <p className="text-sm text-hold">
+        Requested. The figures are collected overnight, so they should be here
+        tomorrow.
+      </p>
+    );
+  }
+
+  const spent = requests.remaining === 0;
+  return (
+    <div className="flex flex-wrap items-center gap-3">
+      <button
+        onClick={() => void requests.request(ticker)}
+        disabled={spent || requests.loading}
+        className={`rounded-md px-3 py-1.5 text-sm ring-1 transition-colors ${
+          spent
+            ? 'cursor-not-allowed bg-ink-900 text-ink-600 ring-ink-800'
+            : 'bg-accent/15 text-accent ring-accent/40 hover:bg-accent/25'
+        }`}
+      >
+        {requests.loading ? 'Requesting\u2026' : 'Request financials'}
+      </button>
+      <p className="text-xs text-ink-600">
+        {spent
+          ? `No requests left this week. The limit is ${WEEKLY_QUOTA} in seven days.`
+          : `${requests.remaining} of ${WEEKLY_QUOTA} left this week \u00b7 collected overnight`}
+      </p>
+      {requests.error && (
+        <p className="w-full text-xs text-sell">{requests.error}</p>
+      )}
+    </div>
+  );
+}
+
 function Figure({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
     <div title={hint}>
@@ -101,10 +161,12 @@ function Figure({ label, value, hint }: { label: string; value: string; hint?: s
  * quarterly history are missing. Saying so beats a 404.
  */
 export function CompanyPage({
-  byId, listedById,
+  byId, listedById, requests, signedIn,
 }: {
   byId: Map<string, Company>;
   listedById: Map<string, Listed>;
+  requests: RequestState;
+  signedIn: boolean;
 }) {
   const { id } = useParams<{ id: string }>();
   const summary = id ? byId.get(id) : undefined;
@@ -165,6 +227,13 @@ export function CompanyPage({
             Without them there are no signals, no valuation and no tier \u2014 so it
             does not appear in the screen or the charts.
           </p>
+
+          {authConfigured && (
+            <div className="mt-4 border-t border-ink-800 pt-4">
+              <RequestControl ticker={listed.ticker} requests={requests}
+                              signedIn={signedIn} />
+            </div>
+          )}
         </div>
       </div>
     );

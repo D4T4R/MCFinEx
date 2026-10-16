@@ -590,3 +590,95 @@ class TestPricedButNotScreened:
         with Store(tmp_path / "s.db") as store:
             store.create_schema()
             assert store.mark_for_scraping([]) == 0
+
+
+class TestRequestQueue:
+    """Reader requests for a company the screen does not cover.
+
+    The table itself lives in Supabase and is created by
+    web/supabase/requests.sql, so everything here has to work both when it
+    exists and when it does not -- the second is the normal state locally and on
+    any database the web app has never touched.
+    """
+
+    def _with_queue(self, store):
+        # The Postgres table without the Postgres-only parts: no auth.users
+        # reference, no RLS. What is being tested here is the pipeline's half.
+        store.conn.execute(
+            "CREATE TABLE scrape_request ("
+            "  id TEXT PRIMARY KEY, user_id TEXT NOT NULL, ticker TEXT NOT NULL,"
+            "  requested_at TEXT NOT NULL, promoted_at TEXT)"
+        )
+        store.conn.commit()
+
+    def _request(self, store, ticker, at, rid=None, user="u1"):
+        store.conn.execute(
+            "INSERT INTO scrape_request (id, user_id, ticker, requested_at) "
+            "VALUES (?, ?, ?, ?)", (rid or f"id-{ticker}", user, ticker, at))
+        store.conn.commit()
+
+    def test_a_missing_table_is_not_an_error(self, tmp_path):
+        # Local SQLite has no such table and never will. "No requests" is the
+        # right answer, not a crash in the nightly job.
+        with Store(tmp_path / "s.db") as store:
+            store.create_schema()
+            assert store.pending_requests() == []
+
+    def test_the_queue_is_served_oldest_first(self, tmp_path):
+        # A newest-first queue leaves Monday's request behind everyone since,
+        # which makes a two-a-week quota worth nothing.
+        with Store(tmp_path / "s.db") as store:
+            store.create_schema()
+            self._with_queue(store)
+            self._request(store, "LATER", "2026-10-15T10:00:00Z")
+            self._request(store, "EARLIER", "2026-10-13T10:00:00Z")
+            assert [r["ticker"] for r in store.pending_requests()] == ["EARLIER", "LATER"]
+
+    def test_promoted_requests_leave_the_queue(self, tmp_path):
+        with Store(tmp_path / "s.db") as store:
+            store.create_schema()
+            self._with_queue(store)
+            self._request(store, "DELAPLEX", "2026-10-15T10:00:00Z")
+            assert store.mark_requests_promoted(["id-DELAPLEX"]) == 1
+            assert store.pending_requests() == []
+
+    def test_promoting_twice_does_not_reopen_a_request(self, tmp_path):
+        # A re-run of the drain must not re-promote something already answered.
+        with Store(tmp_path / "s.db") as store:
+            store.create_schema()
+            self._with_queue(store)
+            self._request(store, "DELAPLEX", "2026-10-15T10:00:00Z")
+            store.mark_requests_promoted(["id-DELAPLEX"], when="2026-10-15")
+            assert store.mark_requests_promoted(["id-DELAPLEX"], when="2026-10-16") == 0
+
+    def test_the_limit_bounds_one_run(self, tmp_path):
+        with Store(tmp_path / "s.db") as store:
+            store.create_schema()
+            self._with_queue(store)
+            for i in range(5):
+                self._request(store, f"T{i}", f"2026-10-1{i}T10:00:00Z")
+            assert len(store.pending_requests(limit=2)) == 2
+            assert len(store.pending_requests()) == 5
+
+    def test_promoting_nothing_is_not_an_error(self, tmp_path):
+        with Store(tmp_path / "s.db") as store:
+            store.create_schema()
+            self._with_queue(store)
+            assert store.mark_requests_promoted([]) == 0
+
+    def test_a_request_moves_the_company_into_the_scrape_backlog(self, tmp_path):
+        # End to end: the whole point of the queue.
+        with Store(tmp_path / "s.db") as store:
+            store.create_schema()
+            self._with_queue(store)
+            store.upsert_company("DELAPLEX", {"isin": "INE0SK801018", "board": "SME",
+                                              "scan_for_results": "N"})
+            assert store.unscraped_tickers() == []
+
+            self._request(store, "DELAPLEX", "2026-10-15T10:00:00Z")
+            queued = store.pending_requests()
+            store.mark_for_scraping([r["ticker"] for r in queued])
+            store.mark_requests_promoted([r["id"] for r in queued])
+
+            assert store.unscraped_tickers() == ["DELAPLEX"]
+            assert store.pending_requests() == []

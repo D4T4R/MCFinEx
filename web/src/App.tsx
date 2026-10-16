@@ -15,6 +15,7 @@ import { Shell } from './components/Shell';
 import { loadScreen, UnsupportedSchemaError } from './data/remote';
 import { apply, EMPTY_FILTERS, sectorsOf, type Filters } from './lib/filters';
 import { supabase } from './lib/supabase';
+import { useRequests } from './lib/useRequests';
 import { useWatchlist } from './lib/useWatchlist';
 import { Screener } from './screens/Screener';
 import type { ScreenPayload } from './types';
@@ -71,6 +72,7 @@ export default function App() {
   }, []);
 
   const watchlist = useWatchlist(userId);
+  const requests = useRequests(userId);
   const companies = payload?.companies ?? [];
   const sectors = useMemo(() => sectorsOf(companies), [companies]);
   // The company page reads its summary from here rather than fetching again:
@@ -176,7 +178,8 @@ export default function App() {
           path="/company/:id"
           element={
             <Suspense fallback={<Loading />}>
-              <CompanyPage byId={byId} listedById={listedById} />
+              <CompanyPage byId={byId} listedById={listedById}
+                           requests={requests} signedIn={Boolean(userId)} />
             </Suspense>
           }
         />

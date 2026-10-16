@@ -53,6 +53,13 @@ VITE_SUPABASE_URL=https://<ref>.supabase.co
 VITE_SUPABASE_ANON_KEY=<anon key>
 ```
 
+`supabase/requests.sql` adds the request queue: a reader signed in can ask for
+an SME company's financials, two a week, and the nightly job collects them. The
+quota is enforced by the insert policy and counted by a SECURITY DEFINER
+function -- a policy on a table cannot sub-query that same table without
+Postgres recursing, and a limit checked in the browser is a disabled button in
+front of an open endpoint.
+
 The anon key belongs in the browser — it is a public identifier, not a secret.
 What protects the tables is `supabase/preferences.sql`, which must be run once in
 the SQL editor. **The service-role key must never appear in this directory**; it

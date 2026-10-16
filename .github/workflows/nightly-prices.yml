@@ -66,6 +66,16 @@ jobs:
       - name: Pick up newly listed symbols
         run: mcfinex universe
 
+      # Before the scrape, not after: promoting a company once the scrape has
+      # already chosen its batch buys the reader another day's wait.
+      #
+      # The per-account quota of two a week lives in the database policy and is
+      # about fairness -- anyone can register another account, so it bounds
+      # nobody's total. This limit is what bounds the job: 20 companies is about
+      # 46 seconds at the measured rate, however many people asked.
+      - name: Take requested companies from the queue
+        run: mcfinex requests --limit 20
+
       # Seeding a company only gives it a symbol, an ISIN and a price. Screening
       # needs financials, and until it has them the company is invisible in the
       # app -- so without this a new listing waited for the quarterly scrape,

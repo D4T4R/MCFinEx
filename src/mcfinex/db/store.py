@@ -9,12 +9,15 @@ anything else in the page text went straight into the database as SQL.
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from datetime import date
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Mapping, Sequence
 
 from .dialect import for_dsn, split_statements
+
+log = logging.getLogger(__name__)
 
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
@@ -624,6 +627,65 @@ class Store:
                 "WHERE last_updated IS NULL ORDER BY ticker"
             )
         ]
+
+    #: Where the web app files requests. Created by web/supabase/requests.sql
+    #: rather than by `create_schema`, because it references auth.users and
+    #: relies on row-level security -- neither of which a local SQLite database
+    #: has. Everything below treats its absence as "no requests".
+    REQUEST_TABLE = "scrape_request"
+
+    def _has_request_table(self) -> bool:
+        try:
+            self.conn.execute(f"SELECT 1 FROM {self.REQUEST_TABLE} LIMIT 1").fetchone()
+        except Exception:
+            return False
+        return True
+
+    def pending_requests(self, limit: int | None = None) -> list[dict[str, Any]]:
+        """Companies readers have asked for, oldest first.
+
+        Oldest first on purpose: a queue that served the newest request would
+        leave somebody who asked on Monday waiting behind everyone since, and
+        the whole point of a two-a-week quota is that a request is worth
+        something.
+
+        Returns nothing at all when the table does not exist. That is the normal
+        state locally and on any database the web app has never touched, so it
+        is not an error -- but it is logged, because "no requests" and "no table"
+        look identical in the output otherwise.
+        """
+        if not self._has_request_table():
+            log.debug("%s is absent; no requests to drain", self.REQUEST_TABLE)
+            return []
+        sql = (f"SELECT id, ticker, user_id, requested_at FROM {self.REQUEST_TABLE} "
+               "WHERE promoted_at IS NULL ORDER BY requested_at")
+        params: list[Any] = []
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(limit)
+        return [
+            {"id": r["id"], "ticker": r["ticker"], "user_id": r["user_id"],
+             "requested_at": r["requested_at"]}
+            for r in self.conn.execute(sql, params)
+        ]
+
+    def mark_requests_promoted(self, ids: Sequence[Any], when: date | str | None = None) -> int:
+        """Record that the queue has handed these to the scraper.
+
+        Only ever set once, and only where it is still null: a re-run of the
+        drain must not reopen and re-promote a request somebody has since had
+        answered.
+        """
+        if not ids:
+            return 0
+        stamp = _scalar(when or date.today())
+        with self.conn:
+            cursor = self.conn.executemany(
+                f"UPDATE {self.REQUEST_TABLE} SET promoted_at = ? "
+                "WHERE id = ? AND promoted_at IS NULL",
+                [(stamp, i) for i in ids],
+            )
+        return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
 
     def mark_for_scraping(self, tickers: Sequence[str]) -> int:
         """Let the next scrape pick these up.
