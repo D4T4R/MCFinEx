@@ -47,8 +47,8 @@ VALUATION_LABELS = [
 # such as "%.2f" is passed through verbatim, so every price rendered as the
 # literal text "%.2f" rather than a number.
 #: Always shown: what identifies a row and what every screen is judged on.
-IDENTITY_COLUMNS = ["Ticker", "Company", "Sector", "Price", "Tier",
-                    "BUY signals", "Quality BUY", "SELL signals", "Scored"]
+IDENTITY_COLUMNS = ["Ticker", "Company", "Sector", "Board", "Market cap", "Price",
+                    "Tier", "BUY signals", "Quality BUY", "SELL signals", "Scored"]
 #: Shown when no particular signal is selected.
 DEFAULT_NUMERIC_COLUMNS = ["EV/EBITDA target", "Upside %", "Entry 3/4", "Entry 2/3",
                            "PE yearly target", "PE quarterly target"]
@@ -61,6 +61,8 @@ SIGNAL_COMPANIONS = {
 }
 
 NUMERIC_FORMATS = {
+    # Rupees crore, grouped Indian-style by pandas' own locale handling.
+    "Market cap": "{:,.0f}",
     "Price": "{:,.2f}",
     "Upside %": "{:+.1f}",
     "EV/EBITDA target": "{:,.1f}",
@@ -69,6 +71,18 @@ NUMERIC_FORMATS = {
     "PE yearly target": "{:,.1f}",
     "PE quarterly target": "{:,.1f}",
 }
+
+
+@st.cache_data(show_spinner=False)
+def _not_screened(db_path: str, revision: str) -> pd.DataFrame:
+    """Companies carrying a price but no financials.
+
+    The SME board is priced nightly and scraped only on request, so a reader
+    searching for one finds nothing and concludes the screen is broken. Same
+    cached revision as the screen itself, so the two always describe one night.
+    """
+    with Store(db_path) as store:
+        return pd.DataFrame(store.listed_not_screened())
 
 
 @st.cache_data(show_spinner="Screening companies...")
@@ -106,7 +120,9 @@ def main() -> None:
         return
 
     st.caption(as_of)
-    filtered, columns, measures = _sidebar(frame)
+    filtered, columns, measures, search = _sidebar(frame)
+    if filtered.empty and search:
+        _explain_empty_search(search, _not_screened(db_path, revision))
     _overview(frame, filtered)
     picked = _table(filtered, columns)
     _explain_row(picked, detail, measures)
@@ -170,7 +186,40 @@ def _sidebar(frame: pd.DataFrame) -> pd.DataFrame:
         out = out[_verdict_mask(out, signals, verdicts, match_all=match_all)]
 
     st.sidebar.caption(f"{len(out)} of {len(frame)} companies")
-    return out, _visible_columns(frame, signals), signals
+    return out, _visible_columns(frame, signals), signals, search
+
+
+def _explain_empty_search(search: str, listed: pd.DataFrame) -> None:
+    """Say which kind of nothing was found.
+
+    "No such company" and "we do not cover that company" look identical from a
+    search box, and only one of them is the screen's doing. Delaplex and AVP
+    Infracon were reported as missing data when they were in fact never
+    screened -- the SME board is priced and not scraped.
+    """
+    if listed.empty:
+        return
+    hits = listed[
+        listed["ticker"].str.lower().str.contains(search, na=False)
+        | listed["name"].fillna("").str.lower().str.contains(search, na=False)
+    ]
+    if hits.empty:
+        return
+
+    st.info(
+        f"{len(hits)} compan{'y' if len(hits) == 1 else 'ies'} matching "
+        f"\u201c{search}\u201d {'is' if len(hits) == 1 else 'are'} listed and priced "
+        "but not screened, so they do not appear above.",
+        icon=":material/info:",
+    )
+    shown = hits.assign(
+        Reason=hits["on_request"].map(
+            {True: "SME board \u2014 financials fetched on request",
+             False: "awaiting its first scrape"}),
+    ).rename(columns={"ticker": "Ticker", "name": "Company",
+                      "price": "Price", "board": "Board"})
+    st.dataframe(shown[["Ticker", "Company", "Board", "Price", "Reason"]],
+                 hide_index=True, width="stretch")
 
 
 def _signal_filter(frame: pd.DataFrame):

@@ -116,6 +116,12 @@ class Row:
             "Ticker": s.ticker,
             "Company": s.name,
             "Sector": s.sector,
+            # The board a company trades on and what it is worth. Neither is
+            # scored -- size is not quality and nor is the board -- but both
+            # change how every other figure in the row should be read, and the
+            # table carried neither until the web screener needed them.
+            "Board": m.board,
+            "Market cap": m.market_cap,
             "Price": m.price,
             "BUY signals": s.buy_count,
             "SELL signals": s.sell_count,

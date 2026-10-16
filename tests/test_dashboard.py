@@ -376,3 +376,53 @@ class TestOperatorControls:
         # view with no explanation reads as the sign-in having failed.
         app = self._app(tmp_path, monkeypatch, email="stranger@x.test")
         assert any("not an operator" in c.value for c in app.sidebar.caption)
+
+
+class TestNotScreenedCompanies:
+    """A search that finds nothing should say which kind of nothing.
+
+    Delaplex and AVP Infracon were reported as missing data when they had in
+    fact never been screened -- the SME board is priced nightly and scraped only
+    on request. "No such company" and "we do not cover that company" look
+    identical from a search box, and only one of them is the screen's doing.
+    """
+
+    @pytest.fixture
+    def app(self, tmp_path, monkeypatch):
+        db = tmp_path / "sme.db"
+        _seed(db)
+        with Store(db) as s:
+            # Priced, never scraped, financials on request.
+            s.upsert_company("DELAPLEX", {
+                "name": "Delaplex Ltd", "isin": "INE0SK801018", "board": "SME",
+                "scan_for_results": "N", "current_price": 163.7,
+            })
+        monkeypatch.setenv("MCFINEX_DB", str(db))
+        monkeypatch.setenv("MCFINEX_DATA_DIR", str(tmp_path))
+        return AppTest.from_file(APP, default_timeout=60).run()
+
+    def test_searching_for_one_explains_rather_than_showing_nothing(self, app):
+        app.sidebar.text_input[0].input("delaplex").run()
+        assert not app.exception
+        assert app.info, "no explanation shown for a company we do not cover"
+        assert "not screened" in app.info[0].value
+
+    def test_the_reason_distinguishes_sme_from_a_pending_first_scrape(self, app):
+        # Searched across every table on the page rather than indexed: the
+        # notice renders before the (empty) screen table, so [-1] is the wrong
+        # one and an index here would pin the layout rather than the content.
+        app.sidebar.text_input[0].input("delaplex").run()
+        rendered = " ".join(str(d.value.to_dict()) for d in app.dataframe)
+        assert "on request" in rendered
+        assert "DELAPLEX" in rendered
+
+    def test_a_genuine_typo_still_says_nothing_extra(self, app):
+        # Nothing matches anywhere, so there is nothing to explain and the
+        # notice would be noise.
+        app.sidebar.text_input[0].input("nosuchcompanyanywhere").run()
+        assert not app.exception
+        assert not app.info
+
+    def test_a_search_that_hits_the_screen_shows_no_notice(self, app):
+        app.sidebar.text_input[0].input("acme").run()
+        assert not app.info
