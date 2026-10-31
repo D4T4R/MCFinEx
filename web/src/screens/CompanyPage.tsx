@@ -153,12 +153,16 @@ function Figure({ label, value, hint }: { label: string; value: string; hint?: s
 }
 
 /**
- * Detail files are written only for companies that reached a tier -- 1,569 of
- * 2,544 -- but the screener lists and links all of them, because a distribution
- * with the untiered removed is not the market. So a company without a detail
- * file is a normal state, not an error: everything in the header comes from the
- * screen payload already in memory, and only the signal breakdown and the
- * quarterly history are missing. Saying so beats a 404.
+ * The header renders from the screen payload already in memory; the signal
+ * breakdown and quarterly history are fetched per company.
+ *
+ * This used to say that a missing detail file was "a normal state, not an
+ * error", because publish wrote detail only for companies that reached a tier.
+ * It was the rationalisation that hid the bug: 878 of 2,706 companies -- TCS,
+ * Reliance, L&T, Hindustan Unilever and Infosys among them -- were linked from
+ * the screener straight to a 404, and the page explained it away instead of
+ * reporting it. Publish now writes a file for every screened company, so a
+ * failed fetch is a real failure and is shown as one.
  */
 export function CompanyPage({
   byId, listedById, requests, signedIn,

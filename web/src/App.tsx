@@ -78,7 +78,7 @@ export default function App() {
   const companies = payload?.companies ?? [];
   const sectors = useMemo(() => sectorsOf(companies), [companies]);
   // The company page reads its summary from here rather than fetching again:
-  // every company is already in memory, including the 975 with no detail file.
+  // screen.json already holds every company, tiered or not.
   const byId = useMemo(
     () => new Map(companies.map((c) => [c.id, c])), [companies]);
   // Listed but not screened, keyed the same way so a company page can tell
