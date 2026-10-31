@@ -281,6 +281,46 @@ def _retry_after(resp: requests.Response, *, fallback: float) -> float:
     return fallback
 
 
+#: Screener links to the consolidated view only when the company files one.
+#: Checked rather than guessed: asking for /consolidated/ on a company without
+#: subsidiaries returns a page the parser cannot read -- AMBIKCO raises
+#: IndexError on it -- so the absence of this link is what keeps the scrape from
+#: reaching for something that is not there.
+_CONSOLIDATED_LINK = re.compile(r'href="/company/[^"]*/consolidated/')
+
+
+def offers_consolidated(html: str) -> bool:
+    """Whether this company publishes consolidated statements at all."""
+    return bool(_CONSOLIDATED_LINK.search(html))
+
+
+def prefer(standalone: Company, consolidated: Company | None) -> Company:
+    """The view that actually describes the business, where there is a choice.
+
+    Consolidated, when it is current. A holding company's standalone accounts
+    describe the holding company and not what it holds: Jio Platforms screened
+    at a P/E of 942 on standalone earnings of Rs 1,281 crore against a market
+    capitalisation of Rs 13 lakh crore, where consolidated earnings of Rs 30,049
+    crore give 42. Reliance, Bajaj Finserv and L&T were all wrong the same way,
+    by factors of 1.8, 4.6 and 1.2.
+
+    But *only* when it is current, and that is the part that cannot be skipped.
+    Screener keeps a consolidated page long after a company stops filing one:
+    Advani Hotels last did in 2010, so its consolidated view still reports 2010
+    sales of Rs 32 crore and a negative ROCE beside a standalone 2026 of Rs 108
+    crore. Preferring consolidated unconditionally would replace this year's
+    figures with sixteen-year-old ones, and nothing downstream could tell.
+    """
+    if consolidated is None:
+        return standalone
+    new, old = consolidated.latest_period, standalone.latest_period
+    if new is None:
+        return standalone
+    if old is not None and new < old:
+        return standalone
+    return consolidated
+
+
 def parse(html: str, ticker: str, *, consolidated: bool = False) -> Company:
     """Turn a company page into a :class:`Company`."""
     soup = BeautifulSoup(html, "lxml")

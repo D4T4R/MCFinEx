@@ -206,3 +206,86 @@ class TestSameCompany:
 
     def test_one_shared_distinguishing_word_is_enough(self):
         assert screener.same_company("Ashapuri Gold Ornament Limited", "Ashapuri Gold Ltd")
+
+
+class TestConsolidatedPreference:
+    """Which set of accounts actually describes the business.
+
+    A holding company's standalone accounts describe the holding company and not
+    what it holds. Jio Platforms screened at a P/E of 942 on standalone earnings
+    of Rs 1,281 crore against a market capitalisation of Rs 13 lakh crore;
+    consolidated earnings of Rs 30,049 crore give 42. Reliance, Bajaj Finserv
+    and L&T were wrong the same way by 1.8x, 4.6x and 1.2x.
+
+    The guard matters more than the preference. Screener keeps a consolidated
+    page long after a company stops filing one -- Advani Hotels last did in 2010
+    -- so preferring it unconditionally replaces this year's figures with
+    sixteen-year-old ones, and nothing downstream could tell.
+    """
+
+    def _company(self, *, quarters, consolidated=False):
+        from mcfinex.sources.screener import Company, Section
+
+        return Company(ticker="X", consolidated=consolidated,
+                       sections={"quarters": Section(periods=list(quarters))})
+
+    def test_current_consolidated_wins(self):
+        standalone = self._company(quarters=[date(2026, 6, 30), date(2026, 9, 30)])
+        group = self._company(quarters=[date(2026, 6, 30), date(2026, 9, 30)],
+                              consolidated=True)
+        assert screener.prefer(standalone, group).consolidated is True
+
+    def test_consolidated_further_ahead_still_wins(self):
+        standalone = self._company(quarters=[date(2026, 6, 30)])
+        group = self._company(quarters=[date(2026, 9, 30)], consolidated=True)
+        assert screener.prefer(standalone, group).consolidated is True
+
+    def test_stale_consolidated_is_refused(self):
+        # The Advani Hotels case: consolidated stops at 2010, standalone is
+        # current. Taking the group view here loses sixteen years.
+        standalone = self._company(quarters=[date(2026, 9, 30)])
+        group = self._company(quarters=[date(2010, 3, 31)], consolidated=True)
+        assert screener.prefer(standalone, group).consolidated is False
+
+    def test_a_consolidated_page_with_no_quarters_is_refused(self):
+        standalone = self._company(quarters=[date(2026, 9, 30)])
+        group = self._company(quarters=[], consolidated=True)
+        assert screener.prefer(standalone, group).consolidated is False
+
+    def test_no_consolidated_at_all_keeps_standalone(self):
+        standalone = self._company(quarters=[date(2026, 9, 30)])
+        assert screener.prefer(standalone, None) is standalone
+
+    def test_standalone_with_no_quarters_does_not_block_consolidated(self):
+        # Nothing to compare against is not evidence the group view is stale,
+        # and a company whose standalone page has no quarters is exactly the one
+        # that needs the consolidated figures.
+        standalone = self._company(quarters=[])
+        group = self._company(quarters=[date(2026, 9, 30)], consolidated=True)
+        assert screener.prefer(standalone, group).consolidated is True
+
+
+class TestOffersConsolidated:
+    """Whether to spend a second request at all.
+
+    Asking for /consolidated/ on a company without subsidiaries returns a page
+    the parser cannot read -- AMBIKCO raises IndexError on it -- so the link is
+    checked rather than the request attempted and the failure caught.
+    """
+
+    def test_a_page_that_links_to_it(self):
+        assert screener.offers_consolidated(
+            '<a href="/company/JPL/consolidated/#balance-sheet">Consolidated</a>')
+
+    def test_a_page_that_does_not(self):
+        assert not screener.offers_consolidated(
+            '<a href="/company/AMBIKCO/#balance-sheet">Balance sheet</a>')
+
+    def test_an_empty_page(self):
+        assert not screener.offers_consolidated("")
+
+    def test_the_word_alone_is_not_enough(self):
+        # "Consolidated" appears in prose on plenty of pages; only the link says
+        # the view exists.
+        assert not screener.offers_consolidated(
+            "<p>These are the consolidated results of the group.</p>")

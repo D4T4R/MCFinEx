@@ -410,6 +410,30 @@ def cmd_scrape(args) -> int:
                     alias=stored["company_id"] if stored else None,
                 )
                 company = screener.parse(html, ticker, consolidated=args.consolidated)
+
+                # A holding company's standalone accounts describe the holding
+                # company, not what it holds. Fetched only when the page says
+                # one exists -- asking otherwise returns something the parser
+                # cannot read -- and used only when it is at least as current,
+                # because screener keeps a consolidated page long after a
+                # company stops filing one.
+                if not args.consolidated and screener.offers_consolidated(html):
+                    try:
+                        group = screener.parse(
+                            screener.fetch(ticker, consolidated=True, session=session,
+                                           timeout=settings.request_timeout,
+                                           throttle=pace,
+                                           alias=stored["company_id"] if stored else None),
+                            ticker, consolidated=True)
+                    except (screener.ScreenerError, requests.RequestException, IndexError) as exc:
+                        # The standalone figures are already in hand and are not
+                        # wrong, only narrower. Losing the company over the
+                        # second page would be the worse trade.
+                        log.debug("%s: no usable consolidated view (%s)",
+                                  ticker, type(exc).__name__)
+                    else:
+                        company = screener.prefer(company, group)
+
                 if not screener.same_company(stored and stored["name"], company.name):
                     # Refusing costs one company a scrape, which is visible here
                     # and fixable. Accepting files another company's financials
