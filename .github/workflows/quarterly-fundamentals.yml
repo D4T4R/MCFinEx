@@ -21,6 +21,14 @@ on:
         description: "Only scrape this many companies (leave blank for all)"
         required: false
         type: string
+      force:
+        description: >-
+          Re-scrape companies that already carry this quarter's figures.
+          Needed after a parser change, when the stored numbers are current
+          but wrong. Makes the run non-resumable -- see the note below.
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   group: quarterly-fundamentals
@@ -29,8 +37,14 @@ concurrency:
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    # Well clear of the expected 60-90 minutes, and under GitHub's six-hour cap.
-    timeout-minutes: 180
+    # A normal run skips companies already carrying the quarter and takes
+    # 60-90 minutes. A `force` run re-scrapes all ~2,700, and since the
+    # consolidated-accounts change each company that files group accounts costs
+    # two throttled requests rather than one -- roughly 2.5 to 4 hours. 180
+    # minutes was sized for the normal case and would cut a forced run off
+    # partway, which is the one case where the work cannot be resumed.
+    # 350 is just inside GitHub's six-hour cap.
+    timeout-minutes: 350
     env:
       MCFINEX_PG: ${{ secrets.MCFINEX_PG }}
       # Screener rate-limits. A full-universe run at 0.7s was throttled from its
@@ -58,15 +72,27 @@ jobs:
       - name: Pick up newly listed symbols
         run: mcfinex universe
 
-      # Re-scrapes anything not already carrying this quarter's results, so a
-      # re-run after a failure resumes rather than starting over.
+      # Without --force this scrapes only what is not already carrying this
+      # quarter's results, so a re-run after a failure resumes where it stopped.
+      #
+      # --force gives that up: every company is re-fetched, so a run that dies
+      # partway has to start over. Use it only when the stored figures are
+      # current but wrong -- after a parser or source change -- and expect to
+      # let it finish in one go.
       - name: Scrape fundamentals
         run: |
+          # Explicit `if` rather than `[ ... ] && args+=(...)`: the latter works
+          # today only because an AND-OR list is exempt from `set -e`, and
+          # stops working the moment it becomes the last line of the step.
+          args=(--all)
           if [ -n "${{ inputs.limit }}" ]; then
-            mcfinex scrape --all --limit "${{ inputs.limit }}"
-          else
-            mcfinex scrape --all
+            args+=(--limit "${{ inputs.limit }}")
           fi
+          if [ "${{ inputs.force }}" = "true" ]; then
+            args+=(--force)
+          fi
+          echo "mcfinex scrape ${args[*]}"
+          mcfinex scrape "${args[@]}"
 
       - name: Refresh closing prices
         run: mcfinex prices
