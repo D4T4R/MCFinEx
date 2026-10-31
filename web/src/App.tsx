@@ -19,6 +19,10 @@ import { useRequests } from './lib/useRequests';
 import { useWatchlist } from './lib/useWatchlist';
 import { Screener } from './screens/Screener';
 import type { ScreenPayload } from './types';
+// Type-only, so this does not pull the lazy chart chunk into the entry bundle.
+// Declared once in Explore rather than mirrored here: the duplicate drifted the
+// moment market cap was added as an axis, and the compiler caught it.
+import type { AxisKey } from './screens/Explore';
 
 // The three screens that draw charts are split out. ECharts is 352 KB over the
 // wire even tree-shaken, and the table -- which is where a reader lands and
@@ -35,8 +39,6 @@ function Loading() {
   return <div className="panel p-10 text-center text-sm text-ink-600">Loading…</div>;
 }
 
-type AxisKey = 'stock_pe' | 'roce' | 'upside_pct' | 'price_to_book'
-  | 'dividend_yield' | 'promoter_holding';
 
 export default function App() {
   const [payload, setPayload] = useState<ScreenPayload | null>(null);

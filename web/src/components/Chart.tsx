@@ -17,6 +17,10 @@ import {
   DataZoomComponent,
   GridComponent,
   LegendComponent,
+  // Median crosshairs on the scatter. Omitting it does not fail the build and
+  // does not throw -- the chart renders as an empty container, which reads as a
+  // layout problem rather than a missing registration.
+  MarkLineComponent,
   TooltipComponent,
   VisualMapComponent,
 } from 'echarts/components';
@@ -27,7 +31,7 @@ import ReactEChartsCore from 'echarts-for-react/lib/core';
 echarts.use([
   ScatterChart, TreemapChart, BarChart,
   GridComponent, TooltipComponent, LegendComponent,
-  DataZoomComponent, VisualMapComponent,
+  DataZoomComponent, VisualMapComponent, MarkLineComponent,
   CanvasRenderer,
 ]);
 

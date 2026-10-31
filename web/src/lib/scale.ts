@@ -27,8 +27,19 @@ export interface Bounds {
  * like normal, and a mean two orders of magnitude above the median takes any
  * sigma-based window with it.
  */
-export function robustBounds(values: number[], lower = 0.02, upper = 0.98): Bounds | null {
-  const sorted = values.filter((v) => Number.isFinite(v)).sort((a, b) => a - b);
+export function robustBounds(
+  values: number[],
+  lower = 0.02,
+  upper = 0.98,
+  log = false,
+): Bounds | null {
+  // On a log axis the percentiles have to be taken in log space, or the padding
+  // below is computed in the wrong units and a "5%" margin at the bottom of the
+  // range is a different width from the one at the top.
+  const usable = log
+    ? values.filter((v) => Number.isFinite(v) && v > 0)
+    : values.filter((v) => Number.isFinite(v));
+  const sorted = usable.sort((a, b) => a - b);
   if (sorted.length === 0) return null;
 
   const at = (p: number) =>
@@ -36,6 +47,19 @@ export function robustBounds(values: number[], lower = 0.02, upper = 0.98): Boun
 
   let min = at(lower);
   let max = at(upper);
+
+  if (log) {
+    // Pad multiplicatively: a decade is a decade wherever it sits.
+    const span = Math.log10(max) - Math.log10(min);
+    const pad = span > 0 ? span * 0.05 : 0.1;
+    const lo = 10 ** (Math.log10(min) - pad);
+    const hi = 10 ** (Math.log10(max) + pad);
+    return {
+      min: round(lo),
+      max: round(hi),
+      outside: sorted.filter((v) => v < lo || v > hi).length,
+    };
+  }
 
   if (min === max) {
     // Every value in the window is identical, so a span has to be invented or
