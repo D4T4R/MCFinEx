@@ -301,9 +301,19 @@ def _dump(path: Path, payload: dict[str, Any]) -> int:
 def write_site(store, out: Path, rows: Iterable | None = None) -> Written:
     """Build the whole static site under ``out``.
 
-    Detail files are written only for companies that reached a tier. The other
-    975 are not shown anywhere in the app, and writing them would triple the
-    publish for pages nobody can navigate to.
+    A detail file for every screened company, tiered or not.
+
+    It used to be the tiered ones only, on the reasoning that the rest were "not
+    shown anywhere in the app, so writing them would triple the publish for
+    pages nobody can navigate to". That reasoning stopped being true the moment
+    the web screener started listing the whole universe and linking every row:
+    878 companies -- 32% of them, including Reliance, TCS, L&T, Hindustan
+    Unilever and Infosys, the five largest -- were fully scraped, linked from
+    the table, and served a 404.
+
+    Measured cost: 9.0 MB of detail instead of 5.5 MB, in an artefact Cloudflare
+    allows a gigabyte for. No change at all to what a reader downloads -- still
+    one ~3.5 KB file for the one company they opened.
     """
     from .report import screen_all
 
@@ -326,17 +336,18 @@ def write_site(store, out: Path, rows: Iterable | None = None) -> Written:
                                   generated=payload["generated"],
                                   listed=store.listed_not_screened()))
 
-    wanted = {p["ticker"]: p["id"] for p in payload["picks"]}
-    _check_ids(wanted)
+    # Every company written, so the collision check covers every file written.
+    # Built from the rows rather than from the ranked picks: taking it from the
+    # picks is what limited detail to the tiered companies, and it also left the
+    # guard blind to any collision among the rest.
+    stems = {row.screening.ticker: file_id(row.screening.ticker) for row in rows}
+    _check_ids(stems)
 
     histories = store.all_quarterly_history(TREND_LABELS)
     written = 0
     for row in rows:
         ticker = row.screening.ticker
-        stem = wanted.get(ticker)
-        if stem is None:
-            continue
-        total += _dump(company_dir / f"{stem}.json",
+        total += _dump(company_dir / f"{stems[ticker]}.json",
                        company_payload(row, histories.get(ticker, {})))
         written += 1
 

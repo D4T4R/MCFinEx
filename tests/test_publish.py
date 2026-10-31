@@ -16,7 +16,7 @@ from mcfinex.publish import (
     SCHEMA, TREND_LABELS, company_payload, file_id, index_payload, money,
     moneys, pick_payload, trend_payload, write_site,
 )
-from mcfinex.picks import Tier, to_pick
+from mcfinex.picks import Tier, classify, to_pick
 
 from .test_picks import make_row
 
@@ -152,14 +152,38 @@ class FakeStore:
 
 
 class TestWriteSite:
-    def test_it_writes_an_index_and_one_file_per_tiered_company(self, tmp_path):
+    def test_it_writes_a_file_for_every_screened_company(self, tmp_path):
+        """Tiered or not. Reaching no shortlist is a verdict, not an absence.
+
+        This used to write only the tiered ones, on the reasoning that the rest
+        were unreachable in the app. The web screener then started listing the
+        whole universe and linking every row, and 878 companies -- Reliance,
+        TCS, L&T, Hindustan Unilever and Infosys among them -- were fully
+        scraped, linked, and served a 404.
+        """
         written = write_site(FakeStore(), tmp_path, _one_tiered_one_not())
 
         assert (tmp_path / "index.json").exists()
-        files = list((tmp_path / "company").glob("*.json"))
-        # The untiered row reaches no screen in the app, so it gets no page.
-        assert [f.stem for f in files] == ["TIERED"]
-        assert written.companies == 1
+        files = sorted(f.stem for f in (tmp_path / "company").glob("*.json"))
+        assert files == ["TIERED", "UNTIERED"]
+        assert written.companies == 2
+
+    def test_an_untiered_company_still_carries_its_signals(self, tmp_path):
+        # The whole point: the data was always there, only the file was missing.
+        write_site(FakeStore(), tmp_path, _one_tiered_one_not())
+        payload = json.loads((tmp_path / "company" / "UNTIERED.json").read_text())
+        assert payload["tier"] == "None"
+        assert payload["signals"], "an untiered company is still scored"
+
+    def test_the_collision_guard_covers_every_file_written(self, tmp_path):
+        # It used to check only the ranked picks, so two untiered companies
+        # colliding on a filename would have overwritten one another silently.
+        first = make_row(ticker="M&M", price=190.0, target=200.0, upside=5.0, buys=0)
+        second = make_row(ticker="M_M", price=190.0, target=200.0, upside=5.0, buys=0)
+        # Both untiered, so the old picks-only guard would not have seen them.
+        assert classify(first) is Tier.NONE and classify(second) is Tier.NONE
+        with pytest.raises(ValueError, match="both publish as"):
+            write_site(FakeStore(), tmp_path, [first, second])
 
     def test_the_detail_file_is_named_by_file_id(self, tmp_path):
         row = make_row(price=100.0, target=200.0)

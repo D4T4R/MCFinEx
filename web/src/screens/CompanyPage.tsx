@@ -296,10 +296,15 @@ export function CompanyPage({
 
       {!detail && (
         <div className="panel p-4">
+          {/* Every screened company has a detail file now, so reaching here
+              means the fetch failed rather than that the company is somehow
+              lesser. The old wording blamed the company's tier, which was both
+              untrue and the reason TCS read as having no data. */}
           <p className="text-sm text-ink-300">
-            The signal breakdown and quarterly history are published only for
-            companies that reached a shortlist, and {head.ticker} did not on the
-            last run. Everything above is from the screen itself.
+            The signal breakdown and quarterly history could not be loaded.
+          </p>
+          <p className="mt-1 text-xs text-ink-600">
+            {error ? error.message : 'The figures above are from the screen itself.'}
           </p>
         </div>
       )}
