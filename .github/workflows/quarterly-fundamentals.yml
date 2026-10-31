@@ -29,6 +29,16 @@ on:
         required: false
         type: boolean
         default: false
+      skip_universe:
+        description: >-
+          Skip seeding new listings and go straight to the scrape. The bhavcopy
+          walk is slow on a weekend or a long holiday, when it has to reach back
+          past the non-trading days to find sessions. Safe to skip: the scrape
+          works from the companies already stored, so the only cost is that
+          anything listed since the last run waits for the nightly job.
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   group: quarterly-fundamentals
@@ -69,7 +79,11 @@ jobs:
             exit 1
           fi
 
+      # `!inputs.skip_universe` rather than a string comparison: on a scheduled
+      # run there are no inputs at all, and null is falsy, so the step still
+      # runs. Only an explicit tick on a dispatch skips it.
       - name: Pick up newly listed symbols
+        if: ${{ !inputs.skip_universe }}
         run: mcfinex universe
 
       # Without --force this scrapes only what is not already carrying this
