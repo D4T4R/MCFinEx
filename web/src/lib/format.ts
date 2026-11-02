@@ -36,6 +36,26 @@ export function plain(value: number | null | undefined, digits = 1): string {
 }
 
 /**
+ * The caveat to print under a figure the screen computed but will not rate, or
+ * nothing when it stands behind it.
+ *
+ * The reason is taken from the signal rather than re-derived. Whether a ratio
+ * can be judged is decided in `screening.py` -- no sector median, no stock P/E,
+ * a per-share history that spans an IPO -- and those conditions will change
+ * there. Restating them here is how the company page came to contradict the
+ * publisher over which companies get a detail file at all.
+ *
+ * A figure with no value needs no caveat: a dash already says it.
+ */
+export function unratedNote(
+  value: number | null | undefined,
+  signal: { available: boolean; rule: string } | undefined,
+): string | undefined {
+  if (value == null || !signal || signal.available) return undefined;
+  return `not rated · ${signal.rule}`;
+}
+
+/**
  * Market capitalisation, which the source gives in rupees crore.
  *
  * Indian convention all the way up, because a reader here thinks in crore and

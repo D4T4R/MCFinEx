@@ -12,7 +12,7 @@ import { Link, useParams } from 'react-router-dom';
 import { BoardChip, FlagChip, TierChip, VerdictChip } from '../components/Chips';
 import { Chart } from '../components/Chart';
 import { loadCompany } from '../data/remote';
-import { money, percent, plain } from '../lib/format';
+import { money, percent, plain, unratedNote } from '../lib/format';
 import { WEEKLY_QUOTA, type RequestState } from '../lib/useRequests';
 import { authConfigured } from '../lib/supabase';
 import { TIER_HELP, type Company, type CompanyDetail, type Listed, type Trend } from '../types';
@@ -143,11 +143,18 @@ function RequestControl({
   );
 }
 
-function Figure({ label, value, hint }: { label: string; value: string; hint?: string }) {
+function Figure({ label, value, hint, note }: {
+  label: string; value: string; hint?: string; note?: string;
+}) {
   return (
     <div title={hint}>
       <dt className="text-[11px] uppercase tracking-wide text-ink-600">{label}</dt>
-      <dd className="tnum text-base text-ink-100">{value}</dd>
+      {/* A noted figure is dimmed to the muted ink: the number is still shown,
+          because withholding a figure the screen computed is its own kind of
+          lie, but it must not sit at the same weight as one the screen will
+          stand behind. */}
+      <dd className={`tnum text-base ${note ? 'text-ink-400' : 'text-ink-100'}`}>{value}</dd>
+      {note && <p className="mt-0.5 text-[10px] leading-tight text-ink-600">{note}</p>}
     </div>
   );
 }
@@ -259,6 +266,19 @@ export function CompanyPage({
     return <div className="panel p-8 text-center text-sm text-ink-600">Loading…</div>;
   }
 
+  // Unrated rather than absent. `_pe` marks the signal unavailable when it
+  // cannot place the ratio against a sector median, and Jio Platforms is the
+  // case that matters: a P/E of 1,019 on earnings that span its IPO, 24th
+  // highest of 2,332 against a median of 30.5, with no sector assigned. The
+  // screen already declines to judge it; the header should not quietly assert
+  // it at the same weight as the price.
+  // From `summary`, not `head`: `head` prefers the detail file, and the detail
+  // file has no stock_pe at all. The fundamentals live in screen.json and only
+  // there, which is why fetching company/<id>.json and finding no P/E looks
+  // like missing data when it is just the wrong file.
+  const peNote = unratedNote(
+    summary?.stock_pe, detail?.signals.find((s) => s.key === 'pe'));
+
   return (
     <div className="space-y-4">
       <div className="panel p-5">
@@ -295,6 +315,16 @@ export function CompanyPage({
                   hint="Two thirds of the target: where the model calls it actionable." />
           <Figure label="Models agreeing" value={`${head.models_agreeing}/3`}
                   hint="EV/EBITDA, P/E on yearly earnings, P/E on quarterly." />
+          {/* The reason is taken from the signal rather than re-derived here.
+              `_pe` withholds a verdict when there is no stock P/E or no sector
+              median, and a newly listed company has earnings spanning its IPO
+              -- conditions that live in screening.py and will change there.
+              Restating them in TypeScript is how the detail page came to
+              contradict the publisher over which companies get a file. */}
+          <Figure label="P/E" value={plain(summary?.stock_pe)} note={peNote}
+                  hint={peNote
+                    ? 'The screen does not rate this P/E; the figure is shown for reference only.'
+                    : 'Trailing price to earnings, against the sector median.'} />
         </dl>
       </div>
 
