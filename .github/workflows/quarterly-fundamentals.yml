@@ -25,10 +25,18 @@ on:
         description: >-
           Re-scrape companies that already carry this quarter's figures.
           Needed after a parser change, when the stored numbers are current
-          but wrong. Makes the run non-resumable -- see the note below.
+          but wrong. Starts from the top of the alphabet every time -- to
+          continue an interrupted one, use stale_before instead.
         required: false
         type: boolean
         default: false
+      stale_before:
+        description: >-
+          "YYYY-MM-DD. Resume an interrupted force run: takes only companies
+          last scraped before this date, and re-scrapes them whatever their
+          stored quarter says. Pass the date the interrupted run started."
+        required: false
+        type: string
       skip_universe:
         description: >-
           Skip seeding new listings and go straight to the scrape. The bhavcopy
@@ -86,13 +94,18 @@ jobs:
         if: ${{ !inputs.skip_universe }}
         run: mcfinex universe
 
-      # Without --force this scrapes only what is not already carrying this
-      # quarter's results, so a re-run after a failure resumes where it stopped.
+      # Three ways to choose what gets scraped:
       #
-      # --force gives that up: every company is re-fetched, so a run that dies
-      # partway has to start over. Use it only when the stored figures are
-      # current but wrong -- after a parser or source change -- and expect to
-      # let it finish in one go.
+      #   neither flag   only what is not already carrying this quarter, so a
+      #                  re-run resumes on its own.
+      #   force          everything, ignoring how current it looks. For when the
+      #                  stored figures are current but wrong. Starts at the top
+      #                  of the alphabet each time, so an interrupted run cannot
+      #                  be continued this way -- it would repeat its own work.
+      #   stale_before   everything last scraped before a date, re-scraped
+      #                  regardless. This is the resume: a scrape stamps
+      #                  last_updated, so the date separates done from pending.
+      #                  Pass the date the interrupted run started.
       - name: Scrape fundamentals
         run: |
           # Explicit `if` rather than `[ ... ] && args+=(...)`: the latter works
@@ -104,6 +117,9 @@ jobs:
           fi
           if [ "${{ inputs.force }}" = "true" ]; then
             args+=(--force)
+          fi
+          if [ -n "${{ inputs.stale_before }}" ]; then
+            args+=(--stale-before "${{ inputs.stale_before }}")
           fi
           echo "mcfinex scrape ${args[*]}"
           mcfinex scrape "${args[@]}"

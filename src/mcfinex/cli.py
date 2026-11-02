@@ -68,6 +68,11 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--template", default=str(settings.template_path))
     p.add_argument("--consolidated", action="store_true", help="prefer consolidated statements")
     p.add_argument("--force", action="store_true", help="re-scrape even if already current")
+    p.add_argument("--stale-before", metavar="YYYY-MM-DD",
+                   help="with --all, take only companies last scraped before this "
+                        "date, and re-scrape them whatever their stored quarter "
+                        "says. This is how a --force run that ran out of time gets "
+                        "resumed: pass the date that run started")
     p.add_argument("--limit", type=int, help="stop after N companies")
     p.add_argument("--missing", type=int, metavar="N",
                    help="instead of named tickers, scrape up to N companies that "
@@ -383,7 +388,16 @@ def cmd_scrape(args) -> int:
         elif not tickers and args.from_template:
             tickers = workbook.tickers_in(args.template)
         elif not tickers and args.all:
-            tickers = store.tickers()
+            if args.stale_before:
+                tickers = store.tickers_not_scraped_since(args.stale_before)
+                log.info("%d of %d companies were last scraped before %s",
+                         len(tickers), len(store.tickers()), args.stale_before)
+                if not tickers:
+                    log.info("nothing older than %s; already caught up",
+                             args.stale_before)
+                    return 0
+            else:
+                tickers = store.tickers()
         if not tickers:
             log.error("no tickers given; pass them explicitly, or use "
                       "--missing N / --from-template / --all after `universe`")
@@ -392,8 +406,15 @@ def cmd_scrape(args) -> int:
             tickers = tickers[: args.limit]
 
         log.info("scraping %d companies for quarter %s", len(tickers), quarter)
+        # --stale-before has already done the selecting, and by a stricter rule
+        # than needs_refresh: these companies are known to predate the cutoff.
+        # Asking needs_refresh again would skip every one of them, since their
+        # stored quarter is current -- current but wrong is the whole reason for
+        # re-scraping. So the cutoff implies the force, rather than quietly
+        # selecting a list and then doing nothing with it.
+        refresh_all = args.force or bool(args.stale_before)
         for index, ticker in enumerate(tickers, start=1):
-            if not args.force and not store.needs_refresh(ticker, quarter):
+            if not refresh_all and not store.needs_refresh(ticker, quarter):
                 log.debug("[%d/%d] %s already current", index, len(tickers), ticker)
                 continue
             try:

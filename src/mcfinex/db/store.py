@@ -555,6 +555,34 @@ class Store:
         sql += " ORDER BY ticker"
         return [r["ticker"] for r in self.conn.execute(sql)]
 
+    def tickers_not_scraped_since(self, cutoff: str, *,
+                                  only_scannable: bool = True) -> list[str]:
+        """Companies whose last scrape predates ``cutoff`` (an ISO date).
+
+        This is what makes a forced full re-scrape resumable. `--force` exists
+        for the case where the stored figures are current but wrong -- after a
+        parser change -- and it necessarily ignores `needs_refresh`, so a run
+        that dies partway has no way to tell what it already did. `--limit`
+        does not help either: it takes the leading N of a list ordered by
+        ticker, so a second run repeats exactly the companies the first one
+        finished.
+
+        A date cutoff does tell them apart, because a scrape stamps
+        `last_updated`. Re-dispatching with the same cutoff picks up only what
+        is left, and companies fixed by some *other* run that day drop out too
+        -- which a simple offset would have re-fetched for nothing.
+
+        `last_updated` is stored as an ISO date string, so a string comparison
+        orders it correctly. NULL means never scraped and is always included;
+        `NULL < 'date'` is NULL rather than true in SQL, so it needs saying.
+        """
+        sql = ("SELECT ticker FROM companies "
+               "WHERE (last_updated IS NULL OR last_updated < ?)")
+        if only_scannable:
+            sql += " AND scan_for_results = 'Y'"
+        sql += " ORDER BY ticker"
+        return [r["ticker"] for r in self.conn.execute(sql, (cutoff,))]
+
     def company(self, ticker: str):
         cur = self.conn.execute("SELECT * FROM companies WHERE ticker = ?", (ticker,))
         return cur.fetchone()

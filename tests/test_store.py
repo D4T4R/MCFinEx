@@ -166,6 +166,47 @@ class TestValuations:
         assert store.scraped_tickers() == ["DONE"]
 
 
+class TestTickersNotScrapedSince:
+    """Resuming a forced re-scrape that ran out of time.
+
+    The cutoff is what tells a finished company from an unfinished one, because
+    --force ignores needs_refresh and --limit always takes the same leading N.
+    """
+
+    def test_it_takes_only_what_predates_the_cutoff(self, store):
+        store.upsert_company("OLD", {"last_updated": "2026-10-30"})
+        store.upsert_company("DONE", {"last_updated": "2026-10-31"})
+        assert store.tickers_not_scraped_since("2026-10-31") == ["OLD"]
+
+    def test_a_company_never_scraped_is_included(self, store):
+        # `NULL < '2026-10-31'` is NULL, not true, so without an explicit IS
+        # NULL the seeded companies silently drop out -- exactly the ones most
+        # in need of scraping.
+        store.upsert_company("SEEDED", {"isin": "IN123"})
+        assert store.tickers_not_scraped_since("2026-10-31") == ["SEEDED"]
+
+    def test_the_cutoff_is_exclusive_so_a_run_does_not_redo_its_own_work(self, store):
+        # Pass the date the interrupted run started: everything it stamped that
+        # day is excluded, so re-dispatching cannot repeat it.
+        store.upsert_company("SAME_DAY", {"last_updated": "2026-10-31"})
+        assert store.tickers_not_scraped_since("2026-10-31") == []
+
+    def test_unscannable_companies_stay_out(self, store):
+        # The SME board is priced but deliberately not screened; a resume must
+        # not be the thing that drags those into a scrape.
+        store.upsert_company("SME", {"last_updated": "2026-01-01",
+                                     "scan_for_results": "N"})
+        store.upsert_company("MAIN", {"last_updated": "2026-01-01"})
+        assert store.tickers_not_scraped_since("2026-10-31") == ["MAIN"]
+        assert "SME" in store.tickers_not_scraped_since(
+            "2026-10-31", only_scannable=False)
+
+    def test_it_is_ordered_so_a_run_is_reproducible(self, store):
+        for t in ("ZEE", "ACME", "MID"):
+            store.upsert_company(t, {"last_updated": "2026-01-01"})
+        assert store.tickers_not_scraped_since("2026-10-31") == ["ACME", "MID", "ZEE"]
+
+
 class TestPostgresConnection:
     """The connection must be autocommit, and it is not a style choice.
 
