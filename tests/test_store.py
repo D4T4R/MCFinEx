@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime, timezone
 
 import pytest
 
@@ -164,6 +164,53 @@ class TestValuations:
         store.upsert_company("SEEDED", {"isin": "IN123"})
         store.upsert_company("DONE", {"last_updated": "2026-01-01"})
         assert store.scraped_tickers() == ["DONE"]
+
+
+class TestScreenSnapshot:
+    """The record of who was shortlisted, which is what "what changed" needs."""
+
+    def at(self, store, day, tickers, universe=100):
+        return store.save_screen_snapshot(
+            tickers, universe, when=datetime(2026, 11, day, 22, 30, tzinfo=timezone.utc))
+
+    def test_it_round_trips_the_shortlist(self, store):
+        self.at(store, 10, ["ACME", "ZEE"])
+        [snap] = store.recent_snapshots()
+        assert snap["tickers"] == {"ACME", "ZEE"}
+        assert snap["taken_on"] == "2026-11-10"
+        assert snap["universe"] == 100
+
+    def test_a_second_run_the_same_day_corrects_rather_than_appends(self, store):
+        # Two snapshots on one day would make the next comparison diff a run
+        # against itself and report "nothing changed".
+        self.at(store, 10, ["ACME"])
+        self.at(store, 10, ["ACME", "ZEE"])
+        snaps = store.recent_snapshots()
+        assert len(snaps) == 1
+        assert snaps[0]["tickers"] == {"ACME", "ZEE"}
+
+    def test_snapshots_come_back_newest_first(self, store):
+        self.at(store, 10, ["OLD"])
+        self.at(store, 12, ["NEW"])
+        assert [s["taken_on"] for s in store.recent_snapshots()] == [
+            "2026-11-12", "2026-11-10"]
+
+    def test_history_is_capped(self, store, monkeypatch):
+        monkeypatch.setattr(Store, "SNAPSHOT_HISTORY", 3)
+        for day in range(1, 7):
+            self.at(store, day, [f"T{day}"])
+        kept = store.recent_snapshots(limit=50)
+        assert len(kept) == 3
+        # The newest are the ones worth keeping.
+        assert [s["taken_on"] for s in kept] == [
+            "2026-11-06", "2026-11-05", "2026-11-04"]
+
+    def test_no_snapshots_is_an_empty_list_not_an_error(self, store):
+        # The state every database is in until the first publish runs.
+        assert store.recent_snapshots() == []
+
+    def test_duplicates_collapse_so_the_count_is_of_companies(self, store):
+        assert self.at(store, 10, ["ACME", "ACME", "ZEE"]) == 2
 
 
 class TestTickersNotScrapedSince:

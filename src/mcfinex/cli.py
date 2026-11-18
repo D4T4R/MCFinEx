@@ -747,15 +747,31 @@ def cmd_publish(args) -> int:
     """
     from pathlib import Path
 
+    from .picks import rank
     from .publish import write_site
 
     with Store(args.db) as store:
+        # Publish used to read only, and the read-only commands skip this on
+        # purpose. Recording the shortlist makes it a writer, so it now owes the
+        # same guarantee `notify` does: `screen_snapshot` arrived after the
+        # database did, the nightly runs no `init`, and `--skip-universe` means
+        # publish can be the first command of the night to touch the schema.
+        # CREATE TABLE IF NOT EXISTS makes it a no-op on every run after.
+        store.create_schema()
         rows = screen_all(store)
         if not rows:
             log.error("nothing screened; refusing to publish an empty site")
             return 1
         written = write_site(store, Path(args.out), rows)
+
+        # After the site is written, not before. The snapshot is the record of
+        # what was published, so a run that dies building the files must not
+        # leave a row claiming it shipped -- the next run would diff against a
+        # shortlist nobody ever saw and report a change that did not happen.
+        shortlist = [p.ticker for p in rank(rows)]
+        store.save_screen_snapshot(shortlist, universe=len(rows))
     log.info("published %s", written.summary)
+    log.info("shortlist of %d recorded for the change count", len(shortlist))
     return 0
 
 

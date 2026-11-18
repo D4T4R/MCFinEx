@@ -286,3 +286,62 @@ def sector_heat(rows, *, min_companies: int = 3, limit: int | None = None) -> li
         ))
     heat.sort(key=lambda h: (-h.share_pct, -h.picks))
     return heat[:limit] if limit else heat
+
+
+@dataclass(frozen=True)
+class Churn:
+    """How the shortlist moved between two runs."""
+
+    added: int
+    exited: int
+    held: int
+    #: The run this movement happened on.
+    on: str
+    #: The run it was measured against, so a caption can say what "since" means.
+    since: str
+
+    @property
+    def changed(self) -> bool:
+        return bool(self.added or self.exited)
+
+
+def churn(latest: set[str], previous: set[str], on: str, since: str) -> Churn:
+    """Entries and exits between two shortlists.
+
+    Counts, not names. Naming them would be more useful and is deliberately not
+    done: the company a reader would act on is the one that left, and "RELIANCE
+    exited the shortlist" reads as a recommendation to sell when all it means is
+    that one input moved across a threshold.
+    """
+    return Churn(
+        added=len(latest - previous),
+        exited=len(previous - latest),
+        held=len(latest & previous),
+        on=on,
+        since=since,
+    )
+
+
+def last_change(snapshots) -> Churn | None:
+    """The most recent run on which the shortlist actually moved.
+
+    Not the most recent run. Publishing happens nightly, so "when was this last
+    rebuilt" answers "today" forever and is just another freshness stamp next to
+    the price date. What a reader is asking is when the page in front of them
+    last said something different, which on a stable shortlist can be weeks ago.
+
+    Walks newest-first and stops at the first pair that differ, so a long
+    unchanged stretch costs a scan of that stretch and no more. Returns None
+    when nothing moved within the snapshots given -- which is not the same as
+    nothing moving ever, so the caller has to say "within the last N runs"
+    rather than "never".
+
+    Snapshots are dicts as :meth:`Store.recent_snapshots` returns them, newest
+    first.
+    """
+    for newer, older in zip(snapshots, snapshots[1:]):
+        moved = churn(newer["tickers"], older["tickers"],
+                      on=newer["taken_on"], since=older["taken_on"])
+        if moved.changed:
+            return moved
+    return None

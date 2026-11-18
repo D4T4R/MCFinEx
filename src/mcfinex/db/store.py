@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Mapping, Sequence
 
@@ -1012,6 +1012,56 @@ class Store:
                 payload,
             )
         return len(payload)
+
+    #: Snapshots kept. Enough to answer "what changed" across a holiday weekend
+    #: or a run that failed, without the table growing without bound.
+    SNAPSHOT_HISTORY = 90
+
+    def save_screen_snapshot(self, tickers: Iterable[str], universe: int,
+                             when: datetime | None = None) -> int:
+        """Record today's shortlist, replacing any already recorded today.
+
+        Sorted before storing so two runs of the same shortlist produce the same
+        string, which makes the row diffable by eye and the tests stable.
+        """
+        moment = when or datetime.now(timezone.utc)
+        names = sorted(set(tickers))
+        with self.conn:
+            self.conn.execute(
+                "INSERT INTO screen_snapshot (taken_on, taken_at, tickers, universe) "
+                "VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(taken_on) DO UPDATE SET taken_at = excluded.taken_at, "
+                "tickers = excluded.tickers, universe = excluded.universe",
+                (moment.date().isoformat(), moment.isoformat(timespec="seconds"),
+                 json.dumps(names, separators=(",", ":")), universe),
+            )
+            # Pruned here rather than by a separate chore, because the only
+            # thing that writes is the only thing that makes it grow.
+            self.conn.execute(
+                "DELETE FROM screen_snapshot WHERE taken_on NOT IN ("
+                "SELECT taken_on FROM screen_snapshot "
+                "ORDER BY taken_on DESC LIMIT ?)",
+                (self.SNAPSHOT_HISTORY,),
+            )
+        return len(names)
+
+    def recent_snapshots(self, limit: int = 2) -> list[dict[str, Any]]:
+        """The most recent shortlists, newest first.
+
+        Returns dicts with `taken_on`, `taken_at`, `tickers` (a set) and
+        `universe`. Fewer than `limit` rows simply means fewer runs have
+        happened; the caller has to cope rather than assume a pair exists.
+        """
+        rows = self.conn.execute(
+            "SELECT taken_on, taken_at, tickers, universe FROM screen_snapshot "
+            "ORDER BY taken_on DESC LIMIT ?", (limit,)
+        )
+        return [
+            {"taken_on": r["taken_on"], "taken_at": r["taken_at"],
+             "tickers": set(json.loads(r["tickers"] or "[]")),
+             "universe": r["universe"]}
+            for r in rows
+        ]
 
 
 def _scalar(value: Any) -> Any:

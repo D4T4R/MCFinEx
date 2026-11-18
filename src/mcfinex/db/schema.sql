@@ -96,3 +96,26 @@ CREATE TABLE IF NOT EXISTS alert_state (
     verdicts    TEXT NOT NULL DEFAULT '{}',
     updated_at  TEXT NOT NULL
 );
+
+-- Who was on the shortlist at the end of each publish, so a reader can be told
+-- what changed rather than only what is true now.
+--
+-- Kept apart from `alert_state`, though both record what the screen said last
+-- time. That one advances only when every push was delivered, because
+-- advancing it early consumes a transition and the alert is lost rather than
+-- delayed. Nothing that merely wants to show a count may be able to cause
+-- that, so the two are separate rows written by different commands.
+--
+-- Keyed on the date rather than the timestamp: publishing twice in one day
+-- should correct that day's record, not append a second one that makes the
+-- next comparison read "nothing changed".
+--
+-- `tickers` is a JSON array rather than a row per company. The only question
+-- asked of it is which names entered and which left -- a set difference, done
+-- in Python -- and a row each would be some 1,800 a night to answer it.
+CREATE TABLE IF NOT EXISTS screen_snapshot (
+    taken_on  TEXT PRIMARY KEY,
+    taken_at  TEXT NOT NULL,
+    tickers   TEXT NOT NULL DEFAULT '[]',
+    universe  INTEGER NOT NULL DEFAULT 0
+);

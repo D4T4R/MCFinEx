@@ -1,6 +1,8 @@
 import pytest
 
-from mcfinex.picks import Tier, classify, rank, sector_heat, to_pick
+from mcfinex.picks import (
+    Tier, churn, classify, last_change, rank, sector_heat, to_pick,
+)
 from mcfinex.report import Row
 from mcfinex.screening import Metrics, screen
 
@@ -237,3 +239,73 @@ class TestNegativeTargets:
         pick = to_pick(make_row(price=100.0, target=200.0))
         assert pick.has_usable_target
         assert pick.is_actionable
+
+
+def snap(day, tickers):
+    return {"taken_on": f"2026-11-{day:02d}", "tickers": set(tickers)}
+
+
+class TestChurn:
+    """How the shortlist moved between two publishes."""
+
+    def test_it_counts_entries_exits_and_holds(self):
+        moved = churn({"A", "B", "C"}, {"B", "C", "D"},
+                      on="2026-11-11", since="2026-11-10")
+        assert (moved.added, moved.exited, moved.held) == (1, 1, 2)
+        assert (moved.on, moved.since) == ("2026-11-11", "2026-11-10")
+
+    def test_an_unchanged_shortlist_reports_no_movement(self):
+        moved = churn({"A", "B"}, {"A", "B"}, on="x", since="y")
+        assert (moved.added, moved.exited) == (0, 0)
+        assert moved.changed is False
+
+    def test_any_movement_at_all_counts_as_changed(self):
+        assert churn({"A"}, set(), on="x", since="y").changed is True
+        assert churn(set(), {"A"}, on="x", since="y").changed is True
+
+    def test_a_first_run_is_all_entries(self):
+        moved = churn({"A", "B"}, set(), on="x", since="y")
+        assert (moved.added, moved.exited, moved.held) == (2, 0, 0)
+
+    def test_an_emptied_shortlist_is_all_exits(self):
+        moved = churn(set(), {"A", "B"}, on="x", since="y")
+        assert (moved.added, moved.exited, moved.held) == (0, 2, 0)
+
+
+class TestLastChange:
+    """When the page last said something different -- not when it last ran."""
+
+    def test_it_skips_past_runs_that_changed_nothing(self):
+        """The whole point of the function.
+
+        Publishing is nightly, so the newest snapshot is always today's. Using
+        that as "last changed" would report today forever and be no more useful
+        than the price date already on the page.
+        """
+        snaps = [snap(18, "ABC"), snap(17, "ABC"), snap(16, "ABC"),
+                 snap(15, "ABD")]
+        moved = last_change(snaps)
+        assert moved.on == "2026-11-16"
+        assert (moved.added, moved.exited) == (1, 1)
+
+    def test_a_change_on_the_newest_run_is_reported_as_today(self):
+        moved = last_change([snap(18, "ABC"), snap(17, "AB")])
+        assert moved.on == "2026-11-18"
+        assert (moved.added, moved.exited) == (1, 0)
+
+    def test_an_unchanged_window_is_none_not_a_zero_change(self):
+        # None means "not within these runs", which the caller reports as a
+        # window. A Churn of 0/0 would read as "it changed, by nothing".
+        assert last_change([snap(18, "AB"), snap(17, "AB"), snap(16, "AB")]) is None
+
+    def test_a_single_snapshot_has_nothing_to_compare(self):
+        assert last_change([snap(18, "AB")]) is None
+
+    def test_no_snapshots_is_not_an_error(self):
+        assert last_change([]) is None
+
+    def test_it_stops_at_the_first_change_rather_than_the_largest(self):
+        # Walking on to find a bigger move would report an older date as the
+        # last change, which is simply wrong.
+        snaps = [snap(18, "ABC"), snap(17, "ABD"), snap(16, "XYZ")]
+        assert last_change(snaps).on == "2026-11-18"

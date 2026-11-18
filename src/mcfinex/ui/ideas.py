@@ -12,6 +12,8 @@ end, which is why none of the logic lives in this file.
 
 from __future__ import annotations
 
+from datetime import date
+
 import pandas as pd
 import streamlit as st
 
@@ -22,7 +24,12 @@ from mcfinex.disclaimer import FULL as _FULL_DISCLAIMER, SHORT as _SHORT_DISCLAI
 from mcfinex.db.store import Store
 from mcfinex.picks import Tier
 from mcfinex.report import screen_all
-from mcfinex.ui import NO_DATA, freshness
+from mcfinex.ui import NO_DATA, _human, freshness
+
+#: How far back to look for the last change. A shortlist that has not moved in
+#: this many runs is reported as unchanged over the window rather than given a
+#: date, because the real date is older than anything retained.
+SNAPSHOT_WINDOW = 30
 
 TIER_HELP = {
     Tier.HIGH_CONVICTION: (
@@ -74,6 +81,7 @@ def main() -> None:
     all_picks, heat, universe = load(str(settings.db_path), _cache_key(settings))
     with Store(str(settings.db_path)) as store:
         as_of = freshness(store)
+        snapshots = store.recent_snapshots(SNAPSHOT_WINDOW)
     st.title("Ideas")
     st.caption("Ranked by corroboration, not by size of upside. " + as_of)
     # Above the signals, not buried under them: a reader who scrolls straight to
@@ -81,6 +89,7 @@ def main() -> None:
     st.warning(_SHORT_DISCLAIMER, icon=":material/info:")
 
     _headline(all_picks, universe)
+    _last_changed(snapshots)
     tier = _controls()
     shortlist = [p for p in all_picks if p.tier is tier]
     st.caption(TIER_HELP[tier])
@@ -113,6 +122,64 @@ def _headline(all_picks, universe: int) -> None:
     clean = sum(1 for p in all_picks if p.tier is Tier.HIGH_CONVICTION and not p.flags)
     e.metric("Without caveats", clean,
              help="High conviction and carrying no data-quality flags")
+
+
+def _last_changed(snapshots) -> None:
+    """When this page last said something different, and by how much.
+
+    Deliberately not "when was it last rebuilt". That runs nightly, so it
+    always answers today, and the reader already has the price and fundamentals
+    dates a line above -- a third freshness stamp tells them nothing. The
+    question a shortlist raises is how settled it is, and "unchanged for nine
+    days" is the answer to that.
+
+    The empty states matter more than the populated one, because they are what
+    ships first: snapshots only begin at the next publish, and a comparison
+    needs two. Printing "0 entered, 0 left" before then would report a
+    measurement where none was taken.
+    """
+    if not snapshots:
+        st.caption(
+            ":grey[Shortlist changes are recorded from the next nightly run onwards.]"
+        )
+        return
+    if len(snapshots) < 2:
+        first = _human(snapshots[0]["taken_on"]) or snapshots[0]["taken_on"]
+        st.caption(
+            f":grey[Shortlist first recorded {first}. Changes appear once there "
+            f"is an earlier run to compare against.]"
+        )
+        return
+
+    moved = picks_module.last_change(snapshots)
+    if moved is None:
+        oldest = _human(snapshots[-1]["taken_on"]) or snapshots[-1]["taken_on"]
+        st.caption(
+            f":grey[Shortlist unchanged across the last {len(snapshots)} runs, "
+            f"back to {oldest}. The same {len(snapshots[0]['tickers']):,} names qualify.]"
+        )
+        return
+
+    when = date.fromisoformat(moved.on)
+    ago = (date.today() - when).days
+    left, middle, right = st.columns(3)
+    left.metric(
+        "Shortlist last changed", _human(moved.on) or moved.on,
+        help="The most recent nightly run whose shortlist differed from the one "
+             "before it. The screen is rebuilt every night; this is when it last "
+             "came out different.",
+    )
+    middle.metric("Entered", moved.added,
+                  help=f"Names that qualified on {_human(moved.on)} "
+                       f"but not on {_human(moved.since)}.")
+    right.metric("Left", moved.exited,
+                 help="Names that stopped qualifying. Not a signal to sell -- it "
+                      "means one input crossed a threshold.")
+    if ago > 0:
+        st.caption(
+            f":grey[No change in the {ago} day{'s' if ago != 1 else ''} since. "
+            f"{moved.held:,} names carried over.]"
+        )
 
 
 def _controls() -> Tier:

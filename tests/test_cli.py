@@ -15,6 +15,8 @@ from mcfinex import cli
 from mcfinex.db.store import Store
 from mcfinex.sources import screener
 
+from .test_picks import make_row
+
 
 QUARTER = "2026-09"
 
@@ -64,6 +66,43 @@ def run_scrape(db, monkeypatch, **overrides):
         setattr(args, key, value)
     cli.cmd_scrape(args)
     return attempted
+
+
+class TestPublishRecordsTheShortlist:
+    """The snapshot is what lets the app say what changed, so publish owes it."""
+
+    def publish(self, tmp_path, rows, monkeypatch):
+        db = tmp_path / "pub.db"
+        with Store(db) as store:
+            store.create_schema()
+        monkeypatch.setattr(cli, "screen_all", lambda store: rows)
+        args = argparse.Namespace(db=str(db), out=str(tmp_path / "site"))
+        return db, cli.cmd_publish(args)
+
+    def test_it_records_the_tiered_names_only(self, tmp_path, monkeypatch):
+        rows = [make_row(ticker="TIERED", price=100.0, target=200.0),
+                make_row(ticker="UNTIERED", price=190.0, target=200.0,
+                         upside=5.0, buys=0)]
+        db, code = self.publish(tmp_path, rows, monkeypatch)
+        assert code == 0
+        with Store(db) as store:
+            [snap] = store.recent_snapshots()
+        # Both are published as files; only one is on the shortlist. The count
+        # a reader sees is of names that qualified, not of pages that exist.
+        assert snap["tickers"] == {"TIERED"}
+        assert snap["universe"] == 2
+
+    def test_a_refused_publish_records_nothing(self, tmp_path, monkeypatch):
+        """No row claiming a shortlist that was never published.
+
+        cmd_publish bails on an empty screen rather than overwrite a good site.
+        Writing a snapshot anyway would leave the next run diffing against a
+        shortlist nobody saw, and reporting a change that never happened.
+        """
+        db, code = self.publish(tmp_path, [], monkeypatch)
+        assert code == 1
+        with Store(db) as store:
+            assert store.recent_snapshots() == []
 
 
 class TestStaleBefore:
