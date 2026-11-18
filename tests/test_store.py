@@ -209,6 +209,19 @@ class TestScreenSnapshot:
         # The state every database is in until the first publish runs.
         assert store.recent_snapshots() == []
 
+    def test_a_missing_table_reads_as_no_history_rather_than_crashing(self, store):
+        """What the hosted database looks like between deploy and first publish.
+
+        The Streamlit pages never migrate -- they are deployed publicly and
+        read a database the nightly job owns -- so the table does not exist
+        until a publish creates it. A raw SELECT took the whole Ideas page down
+        with a stack trace, when the honest answer is the one the page already
+        renders for a database with no runs recorded yet.
+        """
+        with store.conn:
+            store.conn.execute("DROP TABLE screen_snapshot")
+        assert store.recent_snapshots() == []
+
     def test_duplicates_collapse_so_the_count_is_of_companies(self, store):
         assert self.at(store, 10, ["ACME", "ACME", "ZEE"]) == 2
 

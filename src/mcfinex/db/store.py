@@ -662,12 +662,26 @@ class Store:
     #: has. Everything below treats its absence as "no requests".
     REQUEST_TABLE = "scrape_request"
 
-    def _has_request_table(self) -> bool:
+    def _has_table(self, name: str) -> bool:
+        """Whether a table exists, asked by trying to read it.
+
+        Probed rather than looked up in a catalogue, because the catalogue
+        differs between SQLite and Postgres and this has to answer for both.
+        Safe on a live Postgres connection only because it is opened
+        autocommit: a failed statement inside an open transaction would poison
+        every statement after it.
+
+        `name` is always an internal constant. Nothing here interpolates a
+        caller's string into SQL.
+        """
         try:
-            self.conn.execute(f"SELECT 1 FROM {self.REQUEST_TABLE} LIMIT 1").fetchone()
+            self.conn.execute(f"SELECT 1 FROM {name} LIMIT 1").fetchone()
         except Exception:
             return False
         return True
+
+    def _has_request_table(self) -> bool:
+        return self._has_table(self.REQUEST_TABLE)
 
     def pending_requests(self, limit: int | None = None) -> list[dict[str, Any]]:
         """Companies readers have asked for, oldest first.
@@ -1051,7 +1065,17 @@ class Store:
         Returns dicts with `taken_on`, `taken_at`, `tickers` (a set) and
         `universe`. Fewer than `limit` rows simply means fewer runs have
         happened; the caller has to cope rather than assume a pair exists.
+
+        No table is the same answer as no rows. The readers here -- the
+        Streamlit pages -- never migrate, by design: they are deployed publicly
+        and run against a database the nightly job owns. So between shipping
+        this and the first publish that creates the table, a raw SELECT would
+        take the whole Ideas page down with a stack trace, when the honest
+        answer is the one the page already renders: nothing recorded yet.
         """
+        if not self._has_table("screen_snapshot"):
+            log.debug("screen_snapshot is absent; no shortlist history yet")
+            return []
         rows = self.conn.execute(
             "SELECT taken_on, taken_at, tickers, universe FROM screen_snapshot "
             "ORDER BY taken_on DESC LIMIT ?", (limit,)
