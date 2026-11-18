@@ -15,6 +15,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Mapping, Sequence
 
+from ..quarters import in_ist
 from .dialect import for_dsn, split_statements
 
 log = logging.getLogger(__name__)
@@ -1035,10 +1036,16 @@ class Store:
                              when: datetime | None = None) -> int:
         """Record today's shortlist, replacing any already recorded today.
 
+        Dated in Indian market time, not UTC. The nightly lands around 01:10
+        IST, which is still the previous day in UTC -- so keyed on the UTC date
+        a run finishing just after midnight in Mumbai would be filed under
+        yesterday, overwrite yesterday's record, and show the reader a date one
+        behind their own calendar.
+
         Sorted before storing so two runs of the same shortlist produce the same
         string, which makes the row diffable by eye and the tests stable.
         """
-        moment = when or datetime.now(timezone.utc)
+        moment = in_ist(when or datetime.now(timezone.utc))
         names = sorted(set(tickers))
         with self.conn:
             self.conn.execute(

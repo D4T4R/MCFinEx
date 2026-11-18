@@ -9,7 +9,33 @@ build wrote into ``STOCK_MASTER``.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
+
+#: India Standard Time.
+#:
+#: A fixed offset rather than ``ZoneInfo("Asia/Kolkata")``: India has observed
+#: no daylight saving since 1945, so +05:30 is exact for every date this deals
+#: with, and a fixed offset needs no tzdata present on the host.
+IST = timezone(timedelta(hours=5, minutes=30))
+
+
+def in_ist(moment: datetime) -> datetime:
+    """``moment`` as Indian market time. A naive input is read as UTC."""
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone(IST)
+
+
+def today() -> date:
+    """The current date in Indian market time.
+
+    The jobs run on UTC hosts and land around 01:10 IST, which is still the
+    previous day in UTC. Anything dated for a reader here has to be dated by
+    the market's day, or a run finishing just after midnight in Mumbai is filed
+    under yesterday and the date never matches the reader's calendar.
+    """
+    return in_ist(datetime.now(timezone.utc)).date()
+
 
 # Calendar month a results-period ends in, per fiscal quarter. During FY-Q1
 # (Apr-Jun) the newest published results are for the period ending March.

@@ -18,7 +18,7 @@ import pandas as pd
 import streamlit as st
 
 # Absolute imports: streamlit runs this as __main__, not as a package module.
-from mcfinex import picks as picks_module
+from mcfinex import picks as picks_module, quarters
 from mcfinex.config import Settings, database_ready as _database_ready
 from mcfinex.disclaimer import FULL as _FULL_DISCLAIMER, SHORT as _SHORT_DISCLAIMER
 from mcfinex.db.store import Store
@@ -160,8 +160,10 @@ def _last_changed(snapshots) -> None:
         )
         return
 
-    when = date.fromisoformat(moved.on)
-    ago = (date.today() - when).days
+    # Both sides in Indian market time. `taken_on` is an IST date, so measuring
+    # against the host's UTC today would read a run from this evening as having
+    # happened tomorrow, and report "1 day ago" on something hours old.
+    ago = (quarters.today() - date.fromisoformat(moved.on)).days
     left, middle, right = st.columns(3)
     left.metric(
         "Shortlist last changed", _human(moved.on) or moved.on,

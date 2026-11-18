@@ -170,8 +170,11 @@ class TestScreenSnapshot:
     """The record of who was shortlisted, which is what "what changed" needs."""
 
     def at(self, store, day, tickers, universe=100):
+        # Midday UTC is 17:30 IST, so the run falls on the same date in both
+        # and these tests are about ordering rather than the timezone. The
+        # boundary itself is pinned separately below.
         return store.save_screen_snapshot(
-            tickers, universe, when=datetime(2026, 11, day, 22, 30, tzinfo=timezone.utc))
+            tickers, universe, when=datetime(2026, 11, day, 12, 0, tzinfo=timezone.utc))
 
     def test_it_round_trips_the_shortlist(self, store):
         self.at(store, 10, ["ACME", "ZEE"])
@@ -224,6 +227,38 @@ class TestScreenSnapshot:
 
     def test_duplicates_collapse_so_the_count_is_of_companies(self, store):
         assert self.at(store, 10, ["ACME", "ACME", "ZEE"]) == 2
+
+    def test_the_date_is_the_indian_one_not_the_host_s(self, store):
+        """The nightly lands about 01:10 IST, which is still yesterday in UTC.
+
+        Keyed on the UTC date, a run finishing just after midnight in Mumbai
+        is filed under the previous day -- overwriting that day's record, and
+        showing a reader a date one behind their own calendar.
+        """
+        # 19:40 UTC on the 18th is 01:10 IST on the 19th.
+        store.save_screen_snapshot(
+            ["ACME"], 1,
+            when=datetime(2026, 11, 18, 19, 40, tzinfo=timezone.utc))
+        [snap] = store.recent_snapshots()
+        assert snap["taken_on"] == "2026-11-19"
+        assert snap["taken_at"].startswith("2026-11-19T01:10")
+
+    def test_two_runs_either_side_of_ist_midnight_are_separate_days(self, store):
+        # 23:30 IST on the 18th, then 01:10 IST on the 19th. Under UTC keying
+        # both land on the 18th and the second silently replaces the first.
+        store.save_screen_snapshot(
+            ["ACME"], 1, when=datetime(2026, 11, 18, 18, 0, tzinfo=timezone.utc))
+        store.save_screen_snapshot(
+            ["ACME", "ZEE"], 1, when=datetime(2026, 11, 18, 19, 40, tzinfo=timezone.utc))
+        assert [s["taken_on"] for s in store.recent_snapshots()] == [
+            "2026-11-19", "2026-11-18"]
+
+    def test_a_naive_timestamp_is_read_as_utc(self, store):
+        # Rather than as the host's local time, which would make the stored
+        # date depend on where the job happened to run.
+        store.save_screen_snapshot(["ACME"], 1,
+                                   when=datetime(2026, 11, 18, 19, 40))
+        assert store.recent_snapshots()[0]["taken_on"] == "2026-11-19"
 
 
 class TestTickersNotScrapedSince:
