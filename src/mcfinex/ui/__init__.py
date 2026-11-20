@@ -27,6 +27,26 @@ def _human(stamp: str | None) -> str | None:
     return f"{parsed.day} {parsed:%b %Y}"
 
 
+def _short(stamp: str | None) -> str | None:
+    """``2026-11-20`` as ``20/11/26``; ``None`` if it is not a date.
+
+    For a date that has to sit in a row of counts. The long form is close to
+    three times the width of the numbers beside it, which makes a tidy grid
+    look ragged. Prose keeps :func:`_human` -- "20/11/26" reads as a date you
+    have to parse, where "20 Nov 2026" reads as one you can.
+
+    Day first, which is how a date is written in India; the ISO form it comes
+    from is the only one that would be read month-first here.
+    """
+    if not stamp:
+        return None
+    try:
+        parsed = date.fromisoformat(str(stamp)[:10])
+    except ValueError:
+        return None
+    return f"{parsed:%d/%m/%y}"
+
+
 def freshness(store) -> str:
     """How current the data is, for a reader who cannot refresh it themselves.
 

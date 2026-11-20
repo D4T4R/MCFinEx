@@ -24,7 +24,7 @@ from mcfinex.disclaimer import FULL as _FULL_DISCLAIMER, SHORT as _SHORT_DISCLAI
 from mcfinex.db.store import Store
 from mcfinex.picks import Tier
 from mcfinex.report import screen_all
-from mcfinex.ui import NO_DATA, _human, freshness
+from mcfinex.ui import NO_DATA, _human, _short, freshness
 
 #: How far back to look for the last change. A shortlist that has not moved in
 #: this many runs is reported as unchanged over the window rather than given a
@@ -164,23 +164,43 @@ def _last_changed(snapshots) -> None:
     # against the host's UTC today would read a run from this evening as having
     # happened tomorrow, and report "1 day ago" on something hours old.
     ago = (quarters.today() - date.fromisoformat(moved.on)).days
-    left, middle, right = st.columns(3)
-    left.metric(
-        "Shortlist last changed", _human(moved.on) or moved.on,
+    # Five columns on the same grid as the row above. A three-column row
+    # underneath a five-column one puts these on different tracks, so each
+    # figure sits in the gap between the two it belongs under -- which reads as
+    # a layout fault rather than as two rows of one table.
+    #
+    # All five come from the same comparison, so they cannot disagree. Taking
+    # the shortlist size from the live screen instead would mix a figure from
+    # this moment into a row that is otherwise entirely about the last run.
+    when, entered, left, net, held = st.columns(5)
+    # Short form here only: this one sits in a row of counts, where the long
+    # date is three times their width. The help text and the captions below
+    # keep the readable form, because those are prose.
+    when.metric(
+        "Shortlist last changed", _short(moved.on) or moved.on,
         help="The most recent nightly run whose shortlist differed from the one "
              "before it. The screen is rebuilt every night; this is when it last "
              "came out different.",
     )
-    middle.metric("Entered", moved.added,
-                  help=f"Names that qualified on {_human(moved.on)} "
-                       f"but not on {_human(moved.since)}.")
-    right.metric("Left", moved.exited,
-                 help="Names that stopped qualifying. Not a signal to sell -- it "
-                      "means one input crossed a threshold.")
+    entered.metric("Entered", moved.added,
+                   help=f"Names that qualified on {_human(moved.on)} "
+                        f"but not on {_human(moved.since)}.")
+    left.metric("Left", moved.exited,
+                help="Names that stopped qualifying. Not a signal to sell -- it "
+                     "means one input crossed a threshold.")
+    # Arithmetic on the two beside it, and worth a column anyway: whether the
+    # shortlist grew or shrank is the thing a reader takes from those two
+    # numbers, and it should not need doing in their head.
+    net.metric("Net", f"{moved.added - moved.exited:+,}",
+               help="Entered minus left. Positive means the shortlist grew.")
+    # The denominator. Nineteen in and thirty-three out means something
+    # different against twelve hundred names than against fifty.
+    held.metric("Carried over", f"{moved.held:,}",
+                help="On the shortlist both before and after, so the scale the "
+                     "entries and exits should be read against.")
     if ago > 0:
         st.caption(
-            f":grey[No change in the {ago} day{'s' if ago != 1 else ''} since. "
-            f"{moved.held:,} names carried over.]"
+            f":grey[No change in the {ago} day{'s' if ago != 1 else ''} since.]"
         )
 
 

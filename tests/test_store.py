@@ -688,6 +688,38 @@ class TestFreshnessCaption:
         store.upsert_company("AAA", {"last_updated": "not-a-date"})
         assert freshness(store) == "Screened from stored data."
 
+
+class TestShortDate:
+    """The compact form, for a date sitting in a row of counts."""
+
+    def test_it_is_day_first(self):
+        # How a date is written in India. The ISO string it comes from is the
+        # only form that would be read month-first here, so the ambiguous
+        # 11/20/26 ordering is the one thing this must not produce.
+        from mcfinex.ui import _short
+
+        assert _short("2026-11-20") == "20/11/26"
+
+    def test_single_digits_are_padded_so_the_width_is_stable(self):
+        # The point of the short form is a column that lines up.
+        from mcfinex.ui import _short
+
+        assert _short("2026-01-05") == "05/01/26"
+        assert len(_short("2026-01-05")) == len(_short("2026-11-20"))
+
+    def test_a_full_timestamp_is_accepted(self):
+        # `taken_at` carries a time and an offset; only the date is wanted.
+        from mcfinex.ui import _short
+
+        assert _short("2026-11-20T01:10:00+05:30") == "20/11/26"
+
+    def test_nothing_in_nothing_out(self):
+        from mcfinex.ui import _short
+
+        assert _short(None) is None
+        assert _short("") is None
+        assert _short("not-a-date") is None
+
     def test_no_cli_command_is_suggested_to_visitors(self, store):
         from mcfinex.ui import freshness
 
