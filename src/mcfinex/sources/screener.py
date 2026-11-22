@@ -187,46 +187,66 @@ def fetch(ticker: str, *, consolidated: bool = False, session: requests.Session 
     shared :class:`Throttle` across a run so one rejection slows every
     subsequent request rather than only this one.
 
-    ``alias`` is screener's own id for the company -- the BSE scrip code -- tried
-    once if the symbol 404s. Screener addresses a company by its NSE symbol where
-    it has one and by the scrip code where it does not, so a company BSE lists
-    and NSE does not is unreachable by symbol: ``/company/NSE/`` is a 404 while
+    ``alias`` is whatever identifier we hold for the company, tried when the
+    symbol 404s. Screener addresses a company by its NSE symbol where it has
+    one and by the BSE scrip code where it does not, so a company BSE lists and
+    NSE does not is unreachable by symbol: ``/company/NSE/`` is a 404 while
     ``/company/544937/`` is National Stock Exchange of India Ltd. Without this
     such a company can be seeded and priced but never scraped, and so never
     reaches the screen at all.
+
+    Two fallbacks, because ``company_id`` holds one of two different numbers
+    depending on where the row came from. Seeded from the BSE bhavcopy it is
+    the scrip code, which addresses the page directly. Taken from a scraped
+    page it is screener's *internal* id, which does not -- ``/company/213/`` is
+    a 404 where ``/company/id/213/`` redirects to ``/company/506166/``, Apis
+    India. Sixty-eight companies had been failing every run since September on
+    exactly that: present on screener, holding months of stored history, and
+    unreachable because the one number we had was being spent on the one route
+    that cannot use it.
+
+    Ordered scrip-code form first so nothing that resolves today changes path.
     """
     paths = [f"/company/{ticker.upper()}/"]
     if alias:
-        paths.append(f"/company/{str(alias).strip().upper()}/")
+        token = str(alias).strip().upper()
+        paths.append(f"/company/{token}/")
+        paths.append(f"/company/id/{token}/")
     if consolidated:
         paths = [p + "consolidated/" for p in paths]
     path, *fallbacks = paths
     sess = session or requests.Session()
     pace = throttle if throttle is not None else Throttle(delay)
 
-    for attempt in range(retries + 1):
+    # Walking to the next path costs no retry. It used to spend one, which was
+    # affordable at one fallback and is not at two: a company needing the last
+    # path would have reached a rate limit with two retries left of four, and
+    # being throttled says nothing about which path was right.
+    #
+    # Both loops still terminate. The walk is bounded by the number of paths,
+    # each tried at most once because a 404 is a definite answer about that
+    # path; the retries are bounded by `retries`.
+    attempt = 0
+    while True:
         pace.wait()
         resp = sess.get(BASE_URL + path, headers={"User-Agent": USER_AGENT}, timeout=timeout)
         if resp.status_code == 404:
             if fallbacks:
-                # Spends one of the attempts, which is affordable: there are five
-                # by default and only a rate limit needs them. A 404 is a
-                # definite answer about this path, so it is never retried.
                 path, *fallbacks = fallbacks
                 continue
             raise ScreenerError(f"{ticker}: no such company on screener.in")
         if resp.status_code == 429:
             slowed = pace.penalise()
-            if attempt == retries:
+            if attempt >= retries:
                 raise RateLimited(
                     f"{ticker}: rate limited after {retries} retries (delay now {slowed:.1f}s)"
                 )
+            attempt += 1
             time.sleep(_retry_after(resp, fallback=slowed))
             continue
         resp.raise_for_status()
         pace.reward()
         return resp.text
-    raise RateLimited(f"{ticker}: rate limited")  # unreachable, keeps type checkers happy
 
 
 #: Words that identify no company, so they cannot corroborate one either.

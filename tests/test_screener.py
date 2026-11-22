@@ -138,13 +138,41 @@ class TestScripCodeFallback:
             screener.fetch("NSE", session=sess, delay=0)
         assert sess.tried == ["/company/NSE/"]
 
-    def test_both_paths_failing_reports_the_symbol_not_the_code(self):
+    def test_every_path_failing_reports_the_symbol_not_the_code(self):
         # The ticker is what the operator asked for and what everything else
         # keys on; the scrip code would be a puzzle in a log line.
         sess = self._session({})
         with pytest.raises(screener.ScreenerError, match="NSE: no such company"):
             screener.fetch("NSE", session=sess, delay=0, alias=544937)
-        assert sess.tried == ["/company/NSE/", "/company/544937/"]
+        assert sess.tried == ["/company/NSE/", "/company/544937/",
+                              "/company/id/544937/"]
+
+    def test_the_internal_id_route_is_tried_when_the_bare_code_404s(self):
+        """`company_id` holds one of two different numbers.
+
+        Seeded from the BSE bhavcopy it is the scrip code, which addresses the
+        page directly. Taken from a scraped page it is screener's *internal*
+        id, which does not: /company/213/ is a 404 where /company/id/213/
+        redirects to /company/506166/, Apis India. Sixty-eight companies
+        failed every run from September on that alone -- present on screener,
+        months of stored history, and unreachable because the one number we
+        had was being spent on the one route that cannot use it.
+        """
+        sess = self._session({"/company/id/213/": "<html>apis</html>"})
+        html = screener.fetch("APIS", session=sess, delay=0, alias=213)
+        assert html == "<html>apis</html>"
+        assert sess.tried == ["/company/APIS/", "/company/213/",
+                              "/company/id/213/"]
+
+    def test_the_scrip_code_still_wins_where_it_resolves(self):
+        # Ordering matters: the added route must not change the path taken by
+        # anything that already works, or every BSE-only company pays an extra
+        # request a night to learn what it already knew.
+        sess = self._session({"/company/544937/": "<html>nse ltd</html>",
+                              "/company/id/544937/": "<html>wrong</html>"})
+        html = screener.fetch("NSE", session=sess, delay=0, alias=544937)
+        assert html == "<html>nse ltd</html>"
+        assert "/company/id/544937/" not in sess.tried
 
     def test_consolidated_applies_to_the_fallback_too(self):
         sess = self._session({"/company/544937/consolidated/": "<html>c</html>"})
@@ -157,6 +185,44 @@ class TestScripCodeFallback:
         with pytest.raises(screener.ScreenerError):
             screener.fetch("NSE", session=sess, delay=0, alias=None)
         assert sess.tried == ["/company/NSE/"]
+
+    def test_walking_to_the_next_path_costs_no_retry(self, monkeypatch):
+        """Otherwise the fallbacks eat the budget meant for rate limits.
+
+        Walking used to spend an attempt each, which was affordable at one
+        fallback and is not at two: a company reaching the last path would meet
+        a rate limit with two retries left of four. Being throttled says
+        nothing about which path was right, so the two budgets are separate.
+        """
+        monkeypatch.setattr(screener.time, "sleep", lambda _: None)
+
+        class Response:
+            def __init__(self, code):
+                self.status_code = code
+                self.text = "<html>ok</html>"
+                self.headers = {}
+
+            def raise_for_status(self):
+                pass
+
+        class Session:
+            """404s both earlier paths, then 429s four times before yielding."""
+
+            def __init__(self):
+                self.tried = []
+
+            def get(self, url, **kwargs):
+                path = url.replace(screener.BASE_URL, "")
+                self.tried.append(path)
+                if path in ("/company/ACME/", "/company/999/"):
+                    return Response(404)
+                throttled = sum(1 for p in self.tried if p == "/company/id/999/")
+                return Response(429 if throttled <= 4 else 200)
+
+        sess = Session()
+        assert screener.fetch("ACME", session=sess, delay=0, alias=999) == "<html>ok</html>"
+        # Four retries used on the last path, none consumed by the two walks.
+        assert sess.tried.count("/company/id/999/") == 5
 
 
 class TestSameCompany:
