@@ -70,8 +70,8 @@ def metrics_for(store: Store, ticker: str, sector_medians: dict[str, float]) -> 
         ticker=ticker,
         name=company["name"],
         sector=sector,
-        about=company["about"],
-        tags=_tags_of(company["tags"]),
+        about=_optional(company, "about"),
+        tags=_tags_of(_optional(company, "tags")),
         price=company["current_price"],
         reserves=latest(BALANCE_SHEET, *labels.RESERVES),
         equity_capital=latest(BALANCE_SHEET, *labels.EQUITY_CAPITAL),
@@ -189,6 +189,29 @@ def screen_all(store: Store, tickers: list[str] | None = None) -> list[Row]:
     return rows
 
 
+def _optional(row, column: str):
+    """A column's value, or None where the database does not have the column.
+
+    The screen runs inside Streamlit, which never migrates -- it reads a
+    database the nightly job owns. So a column added in the same release as
+    the code that reads it does not exist yet at the moment that code first
+    deploys, and an unguarded `row["about"]` takes every page down with a
+    KeyError until some job happens to run `create_schema`.
+
+    That is the third time this shape has bitten: `screen_snapshot` as a
+    missing table, `tags` as a missing column in `revision`, and this. The
+    rule it encodes is that nothing on a read path may assume a migration has
+    already run.
+
+    Both drivers are covered: psycopg's dict rows raise KeyError, sqlite3.Row
+    raises IndexError.
+    """
+    try:
+        return row[column]
+    except (KeyError, IndexError):
+        return None
+
+
 def _tags_of(raw) -> tuple[str, ...]:
     """Stored tags, or none. Unreadable is the same as absent to a reader."""
     from .tagging import Tags
@@ -223,8 +246,8 @@ def _metrics_from(company, series: dict, models: dict, medians: dict[str, float]
         ticker=company["ticker"],
         name=company["name"],
         sector=sector,
-        about=company["about"],
-        tags=_tags_of(company["tags"]),
+        about=_optional(company, "about"),
+        tags=_tags_of(_optional(company, "tags")),
         price=company["current_price"],
         reserves=first(BALANCE_SHEET, *labels.RESERVES),
         equity_capital=first(BALANCE_SHEET, *labels.EQUITY_CAPITAL),

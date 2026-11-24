@@ -116,3 +116,52 @@ class TestBulkReaders:
     def test_all_valuations_nests_by_model(self, store):
         models = store.all_valuations()
         assert models["AAA"]["ev_ebitda"]["target_price"] == 200.0
+
+
+class TestOlderDatabase:
+    """Screening a database that has not had the newest migration run.
+
+    Production is exactly this between a deploy and the next nightly: the
+    Streamlit process reads a database the jobs own, and never migrates it
+    itself. An unguarded `company["about"]` took both pages down with a
+    KeyError the moment the code shipped.
+    """
+
+    def _store(self, tmp_path, drop):
+        from mcfinex.db.store import Store
+
+        path = tmp_path / "older.db"
+        with Store(path) as s:
+            s.create_schema()
+            for column in drop:
+                s.conn.execute(f"ALTER TABLE companies DROP COLUMN {column}")
+            s.conn.commit()
+            s.upsert_company("ACME", {
+                "name": "Acme Ltd", "current_price": 100.0, "sector": "Widgets",
+                "last_updated": "2026-01-01",
+            })
+            s.replace_financials("ACME", [
+                ("2025-03-31", "profit-loss", "Operating Profit", 100.0),
+                ("2025-03-31", "profit-loss", "EPS in Rs", 10.0),
+            ])
+        return Store(path)
+
+    def test_it_screens_without_the_about_column(self, tmp_path):
+        from mcfinex.report import screen_all
+
+        with self._store(tmp_path, ["about", "tags"]) as store:
+            rows = screen_all(store)
+        assert [r.screening.ticker for r in rows] == ["ACME"]
+        assert rows[0].metrics.about is None
+        assert rows[0].metrics.tags == ()
+
+    def test_a_card_can_render_from_such_a_row(self, tmp_path):
+        # `_card` reads `pick.tags` directly; an absent column must reach it
+        # as an empty tuple, not as a missing attribute or a None.
+        from mcfinex.picks import to_pick
+        from mcfinex.report import screen_all
+
+        with self._store(tmp_path, ["about", "tags"]) as store:
+            rows = screen_all(store)
+        pick = to_pick(rows[0])
+        assert pick.tags == ()
