@@ -62,6 +62,10 @@ class Pick:
     models_agreeing: int
     tier: Tier
     flags: list[str]
+    #: What the company sells, read from its own description. Empty for most
+    #: of the universe until the tagging backlog drains, and empty forever for
+    #: a company whose description names no product -- both render as no chips.
+    tags: tuple[str, ...] = ()
     #: The score with the price-based signals taken out, so a share that rose is
     #: not marked down for having risen.
     quality_buys: int = 0
@@ -193,6 +197,7 @@ def to_pick(row) -> Pick:
         buy_signals=s.buy_count, sell_signals=s.sell_count, scored=s.scored_count,
         models_agreeing=_models_agreeing(row), tier=classify(row), flags=_flags(row),
         quality_buys=s.quality_buy_count, quality_sells=s.quality_sell_count,
+        tags=m.tags,
     )
 
 

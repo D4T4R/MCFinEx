@@ -18,6 +18,12 @@ CREATE TABLE IF NOT EXISTS companies (
     -- will change, and re-scraping the universe to pick up a better regex
     -- would be an absurd way to ship a wording fix.
     about                 TEXT,
+    -- Products or services read out of `about` by a model, as JSON:
+    -- {"source_sha": "...", "tags": [...]}. The digest is of the description
+    -- they were read from, so a re-scrape that rewrites it makes them
+    -- detectably stale rather than quietly wrong. An empty list is an answer
+    -- (the description names no product), not a gap to retry.
+    tags                  TEXT,
     broad_industry        TEXT,
     industry              TEXT,
     face_value            REAL,

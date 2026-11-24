@@ -71,6 +71,7 @@ def metrics_for(store: Store, ticker: str, sector_medians: dict[str, float]) -> 
         name=company["name"],
         sector=sector,
         about=company["about"],
+        tags=_tags_of(company["tags"]),
         price=company["current_price"],
         reserves=latest(BALANCE_SHEET, *labels.RESERVES),
         equity_capital=latest(BALANCE_SHEET, *labels.EQUITY_CAPITAL),
@@ -188,6 +189,14 @@ def screen_all(store: Store, tickers: list[str] | None = None) -> list[Row]:
     return rows
 
 
+def _tags_of(raw) -> tuple[str, ...]:
+    """Stored tags, or none. Unreadable is the same as absent to a reader."""
+    from .tagging import Tags
+
+    stored = Tags.from_json(raw)
+    return stored.tags if stored else ()
+
+
 def _metrics_from(company, series: dict, models: dict, medians: dict[str, float]) -> Metrics:
     """Build Metrics from already-loaded rows, with no further queries."""
 
@@ -215,6 +224,7 @@ def _metrics_from(company, series: dict, models: dict, medians: dict[str, float]
         name=company["name"],
         sector=sector,
         about=company["about"],
+        tags=_tags_of(company["tags"]),
         price=company["current_price"],
         reserves=first(BALANCE_SHEET, *labels.RESERVES),
         equity_capital=first(BALANCE_SHEET, *labels.EQUITY_CAPITAL),

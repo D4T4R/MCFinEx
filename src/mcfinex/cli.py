@@ -123,6 +123,14 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="directory to write index.json and company/ into")
     p.set_defaults(handler=cmd_publish)
 
+    p = sub.add_parser("tags", help="label companies with what they sell")
+    p.add_argument("--missing", type=int, metavar="N", default=500,
+                   help="tag up to N companies that have a description but no "
+                        "current tags (default 500)")
+    p.add_argument("--dry-run", action="store_true",
+                   help="report what would be sent, and send nothing")
+    p.set_defaults(handler=cmd_tags)
+
     p = sub.add_parser("notify", help="push what changed to the phone app over FCM")
     p.add_argument("--dry-run", action="store_true",
                    help="print what would be sent, and leave the state untouched")
@@ -772,6 +780,51 @@ def cmd_publish(args) -> int:
         store.save_screen_snapshot(shortlist, universe=len(rows))
     log.info("published %s", written.summary)
     log.info("shortlist of %d recorded for the change count", len(shortlist))
+    return 0
+
+
+def cmd_tags(args) -> int:
+    """Read products out of each company's own description.
+
+    Offline and batched on purpose: there is no reader waiting, the Batches
+    endpoint is half the price, and the result is stored -- so a page view
+    costs nothing and two readers of a company see the same tags.
+    """
+    from . import tagging
+
+    with Store(args.db) as store:
+        store.create_schema()
+        pairs = tagging.untagged(store, limit=args.missing)
+        outstanding = len(tagging.untagged(store))
+        log.info("%d companies need tags; taking %d", outstanding, len(pairs))
+        if not pairs:
+            # The normal state once the backlog has drained, and not a failure.
+            return 0
+        if args.dry_run:
+            for ticker, about in pairs[:10]:
+                print(f"{ticker:<12} {about[:70]}")
+            print(f"\n{len(pairs)} would be sent to {tagging.MODEL}. Nothing sent.")
+            return 0
+
+        try:
+            import anthropic
+        except ImportError:
+            log.error("the anthropic SDK is not installed. "
+                      "Run: pip install '.[tags]'")
+            return 1
+        try:
+            client = anthropic.Anthropic()
+        except Exception as exc:
+            log.error("no Claude credentials (%s). Set ANTHROPIC_API_KEY, or "
+                      "run `ant auth login`.", type(exc).__name__)
+            return 1
+
+        found = tagging.extract(client, pairs)
+        for ticker, tags in found.items():
+            store.upsert_company(ticker, {"tags": tags.as_json()})
+        labelled = sum(1 for t in found.values() if t.tags)
+        log.info("tagged %d of %d; %d described no product",
+                 labelled, len(pairs), len(found) - labelled)
     return 0
 
 

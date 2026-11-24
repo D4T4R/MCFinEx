@@ -230,6 +230,12 @@ def _card(pick) -> None:
     with st.container(border=True):
         st.markdown(f"**{pick.ticker}** · {pick.sector or '—'}")
         st.caption((pick.name or "")[:44])
+        # What the company sells, under the sector it sells it in. Omitted
+        # entirely when there is nothing to show -- most of the universe will
+        # be untagged until the backlog drains, and an empty row of chips
+        # would push every card taller for nothing.
+        if pick.tags:
+            st.markdown(" ".join(f":blue-badge[{t}]" for t in pick.tags))
 
         rerating = pick.tier is Tier.RERATING
         left, right = st.columns(2)
