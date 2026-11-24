@@ -13,6 +13,11 @@ CREATE TABLE IF NOT EXISTS companies (
     -- schedules API that supplies cash and the current asset/liability split.
     company_id            INTEGER,
     sector                TEXT,
+    -- The company's own description of its business, verbatim from the page
+    -- the scrape already downloads. Stored raw: tidying it is presentation and
+    -- will change, and re-scraping the universe to pick up a better regex
+    -- would be an absurd way to ship a wording fix.
+    about                 TEXT,
     broad_industry        TEXT,
     industry              TEXT,
     face_value            REAL,

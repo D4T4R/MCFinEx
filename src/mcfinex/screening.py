@@ -87,6 +87,10 @@ class Metrics:
     ticker: str
     name: str | None = None
     sector: str | None = None
+    #: The company's own description of its business. No signal reads it -- it
+    #: is prose, not a number -- but it travels with the screen so a reader can
+    #: see what the figures are figures *of*.
+    about: str | None = None
     #: "Main" or "SME". No signal reads it -- the board a company trades on says
     #: nothing about the business -- but it changes how a reader should weigh
     #: everything else, so it travels with the screen rather than being looked up.

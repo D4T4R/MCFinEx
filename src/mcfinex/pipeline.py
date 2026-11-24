@@ -110,6 +110,7 @@ def company_fields(company: Company, derived: Derived, *, today: date | None = N
         "name": company.name,
         "company_id": company.company_id,
         "sector": industry[0],
+        "about": company.about,
         "broad_industry": industry[1],
         "industry": industry[2],
         "face_value": company.ratios.get("Face Value"),

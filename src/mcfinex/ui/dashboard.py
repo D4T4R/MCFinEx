@@ -21,7 +21,7 @@ from mcfinex.db.store import Store
 from mcfinex.enrich import enrich
 from mcfinex.picks import Tier
 from mcfinex.report import screen_all
-from mcfinex.ui import NO_DATA, auth, freshness
+from mcfinex.ui import business_summary, NO_DATA, auth, freshness
 from mcfinex.sources.screener import ScreenerError
 from mcfinex.trends import TREND_LINES, analyse
 from mcfinex.screening import Verdict
@@ -380,6 +380,12 @@ def _drilldown(filtered: pd.DataFrame, detail: dict) -> None:
 
     m, s = row.metrics, row.screening
     st.markdown(f"### {s.name}  \n{s.sector or '-'}")
+
+    # Above the figures, not below. A reader meeting a ticker for the first time
+    # needs to know what the business is before a P/E means anything. Omitted
+    # outright when there is nothing to show, rather than leaving a blank line.
+    if about := business_summary(m.about):
+        st.caption(about)
 
     a, b, c, d = st.columns(4)
     a.metric("Price", f"{m.price:,.2f}" if m.price else "-")

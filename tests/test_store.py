@@ -82,6 +82,28 @@ class TestSchemaMigration:
             }
 
 
+    def test_about_is_added_to_an_older_database(self, tmp_path):
+        # The column arrived after the hosted database did, and nothing runs
+        # `init` against it -- the nightly seeds, prices and publishes into a
+        # database that already exists.
+        path = tmp_path / "old.db"
+        with Store(path) as s:
+            s.create_schema()
+            s.conn.execute("ALTER TABLE companies DROP COLUMN about")
+            s.conn.commit()
+        with Store(path) as s:
+            s.create_schema()
+            assert "about" in {
+                r["name"] for r in s.conn.execute("PRAGMA table_info(companies)")
+            }
+
+    def test_a_description_round_trips(self, tmp_path):
+        with Store(tmp_path / "a.db") as s:
+            s.create_schema()
+            s.upsert_company("ACME", {"about": "Makes widgets for export"})
+            assert s.company("ACME")["about"] == "Makes widgets for export"
+
+
 class TestFinancials:
     def test_series_is_newest_first(self, store):
         store.upsert_company("ACME", {})
@@ -687,6 +709,86 @@ class TestFreshnessCaption:
 
         store.upsert_company("AAA", {"last_updated": "not-a-date"})
         assert freshness(store) == "Screened from stored data."
+
+
+class TestBusinessSummary:
+    """Screener's preamble removed, the company's own words kept."""
+
+    def test_it_drops_the_year_and_the_restated_name(self):
+        from mcfinex.ui import business_summary
+
+        assert business_summary(
+            "Incorporated in 1999, Credo Brands Marketing Ltd is in the business "
+            "of selling of fashion casual garments and accessories under the "
+            "brand name MUFTI"
+        ) == ("Selling of fashion casual garments and accessories under the "
+              "brand name MUFTI")
+
+    def test_it_handles_limited_spelled_out(self):
+        from mcfinex.ui import business_summary
+
+        assert business_summary(
+            "Incorporated in 1994, Tata Technologies Limited is a global "
+            "engineering services company offering Product Development."
+        ) == "Global engineering services company offering Product Development."
+
+    def test_text_with_no_preamble_is_left_alone(self):
+        # The patterns are anchored, so a description that opens with substance
+        # must survive untouched rather than lose its first clause.
+        from mcfinex.ui import business_summary
+
+        original = ("E2E Networks is an Nse-listed AI-focused hyper scale cloud "
+                    "platform, offering advanced cloud GPUs.")
+        assert business_summary(original) == original
+
+    def test_nothing_to_show_is_none_not_an_empty_string(self):
+        # So a caller can omit the block rather than render a blank line.
+        from mcfinex.ui import business_summary
+
+        assert business_summary(None) is None
+        assert business_summary("") is None
+        assert business_summary("   ") is None
+
+    def test_a_description_that_is_only_preamble_survives(self):
+        """Stripping must never leave nothing.
+
+        Better to show the boilerplate than to show an empty panel where the
+        company's own description should be.
+        """
+        from mcfinex.ui import business_summary
+
+        assert business_summary("Incorporated in 1999,") == "Incorporated in 1999,"
+
+    def test_stacked_preambles_are_all_removed(self):
+        """"is engaged in the business of" is three preambles in a row.
+
+        One pass leaves "The business of owning and operating...", which reads
+        like a fragment. Found on Advani Hotels while checking the rendered
+        page rather than the function.
+        """
+        from mcfinex.ui import business_summary
+
+        assert business_summary(
+            "Incorporated in 1987, Advani Hotels & Resorts (India) Ltd is "
+            "engaged in the business of owning and operating a five-star "
+            "deluxe beach resort in Goa"
+        ) == "Owning and operating a five-star deluxe beach resort in Goa"
+
+    def test_a_footnote_marker_is_removed_here_too(self):
+        """The scraper strips it, and this does not rely on that.
+
+        Rows written before the scraper learned to strip it still carry one,
+        and a stray "[1]" on the page reads as a broken link.
+        """
+        from mcfinex.ui import business_summary
+
+        assert business_summary("Makes widgets [1]") == "Makes widgets"
+
+    def test_whitespace_is_collapsed(self):
+        from mcfinex.ui import business_summary
+
+        assert business_summary("Makes   widgets\n  and gadgets") == (
+            "Makes widgets and gadgets")
 
 
 class TestShortDate:

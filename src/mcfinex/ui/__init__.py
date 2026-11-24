@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import date
 
 #: Shown when the database is missing or empty. The pages used to print the CLI
@@ -25,6 +26,62 @@ def _human(stamp: str | None) -> str | None:
     except ValueError:
         return None
     return f"{parsed.day} {parsed:%b %Y}"
+
+
+#: Screener opens most descriptions with the year of incorporation, which is
+#: the least interesting thing it could lead with.
+_FOUNDED = re.compile(r"^(?:incorporated|established|founded|set\s+up)\s+in\s+\d{4}\s*,?\s*",
+                      re.IGNORECASE)
+#: ...then restates the company name the reader just read in the heading.
+_RESTATES_NAME = re.compile(
+    r"^(?:the\s+)?[\w&.,'’\-() ]{3,60}?\s+(?:limited|ltd\.?)\s*(?:\([A-Z]{2,6}\)\s*)?"
+    r"(?:is|was)\s+(?:an?|the)?\s*",
+    re.IGNORECASE)
+#: Applied repeatedly, because these stack: "is engaged in the business of
+#: owning..." strips to "the business of owning..." on one pass and needs a
+#: second to reach the verb. Each alternative is a whole phrase, so looping
+#: cannot eat into the description itself.
+_LEFTOVER = re.compile(
+    r"^(?:is\s+|was\s+)?(?:engaged\s+in|in\s+the\s+business\s+of|the\s+business\s+of"
+    r"|primarily\s+|mainly\s+)\s*",
+    re.IGNORECASE)
+#: Screener footnotes its description with a bracketed source marker. The
+#: scraper strips it, but this does not assume the text came from the scraper:
+#: a row written before that existed still carries one.
+_FOOTNOTE = re.compile(r"\s*\[\d+\]\s*")
+
+
+def business_summary(about: str | None) -> str | None:
+    """What a company actually does, with screener's preamble removed.
+
+    The stored text is verbatim, and most of it opens the same way: "Incorporated
+    in 1999, Credo Brands Marketing Ltd is in the business of selling of fashion
+    casual garments...". The year is rarely the point and the name is already the
+    heading, so two thirds of a short blurb can be throat-clearing.
+
+    Stripping is conservative on purpose. Each pattern is anchored at the start
+    and only removes a preamble it can recognise in full, so the failure mode is
+    leaving a few words in rather than cutting into the substance -- this is the
+    one place in the app where the text is the company's own claim about itself,
+    and truncating that to read better would be editing it.
+
+    Returns None for nothing to show, so a caller can omit the block entirely
+    rather than render an empty panel.
+    """
+    if not about or not about.strip():
+        return None
+    text = _FOOTNOTE.sub(" ", " ".join(about.split())).strip()
+    text = _FOUNDED.sub("", text)
+    text = _RESTATES_NAME.sub("", text)
+    for _ in range(3):
+        stripped = _LEFTOVER.sub("", text)
+        if stripped == text:
+            break
+        text = stripped
+    text = text.strip(" ,;")
+    if not text:
+        return " ".join(about.split())
+    return text[0].upper() + text[1:]
 
 
 def _short(stamp: str | None) -> str | None:

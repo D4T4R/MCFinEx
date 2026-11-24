@@ -39,6 +39,27 @@ class TestParse:
     def test_industry_breadcrumb_is_broadest_first(self, company):
         assert company.industry == ["Fast Moving Consumer Goods", "Food Products", "Seafood"]
 
+    def test_reads_the_business_description(self, company):
+        """The one piece of non-numeric context on the page.
+
+        Free to take: the scrape already downloads this page, so it costs no
+        extra request. Stored verbatim -- tidying it for display is the UI's
+        job, and baking that in would mean re-scraping the universe to change
+        a wording rule.
+        """
+        assert company.about == (
+            "Incorporated in 1981, Coastal Corporation Ltd is engaged in "
+            "processing and export of sea food")
+
+    def test_the_source_footnote_is_dropped(self, company):
+        # Screener appends a bracketed citation marker that means nothing here.
+        assert "[1]" not in (company.about or "")
+
+    def test_a_page_without_a_description_reads_as_absent(self):
+        # None, not "", so a reader can tell "says nothing" from "not scraped".
+        html = "<html><h1>Nameless Ltd</h1></html>"
+        assert screener.parse(html, "X").about is None
+
     def test_headline_ratios(self, company):
         assert company.ratios["Current Price"] == 41.8
         assert company.ratios["Market Cap"] == 280.0

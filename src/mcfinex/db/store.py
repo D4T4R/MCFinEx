@@ -25,7 +25,7 @@ SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 # Guarded so a typo in a caller cannot silently write to a column that does not
 # exist, and so scraped keys can never widen the statement.
 COMPANY_COLUMNS = (
-    "name", "isin", "company_id", "sector", "broad_industry", "industry", "face_value",
+    "name", "isin", "company_id", "sector", "about", "broad_industry", "industry", "face_value",
     "market_cap", "current_price", "book_value", "stock_pe", "industry_pe",
     "dividend_yield", "roce", "roe", "outstanding_shares", "consolidated",
     "scan_for_results", "last_updated", "last_updated_quarter", "latest_period",
@@ -176,7 +176,7 @@ class Store:
         """
         existing = self._company_columns()
         for column, ddl in (("price_date", "TEXT"), ("company_id", "INTEGER"),
-                            ("board", "TEXT")):
+                            ("board", "TEXT"), ("about", "TEXT")):
             if column not in existing:
                 self.conn.execute(f"ALTER TABLE companies ADD COLUMN {column} {ddl}")
 

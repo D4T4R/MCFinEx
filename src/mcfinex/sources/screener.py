@@ -164,6 +164,10 @@ class Company:
     company_id: int | None = None
     consolidated: bool = False
     industry: list[str] = field(default_factory=list)
+    #: What the company says it does, verbatim. Stored raw rather than tidied:
+    #: the tidying is presentation and will be improved, and re-scraping 2,700
+    #: companies to pick up a better regex would be an absurd way to ship one.
+    about: str | None = None
     ratios: dict[str, float | None] = field(default_factory=dict)
     sections: dict[str, Section] = field(default_factory=dict)
 
@@ -354,11 +358,37 @@ def parse(html: str, ticker: str, *, consolidated: bool = False) -> Company:
 
     company.ratios = _parse_top_ratios(soup)
     company.industry = _parse_industry(soup)
+    company.about = _parse_about(soup)
     for name in SECTIONS:
         parsed = _parse_section(soup, name)
         if parsed:
             company.sections[name] = parsed
     return company
+
+
+#: Screener footnotes its description with a bracketed source marker.
+_ABOUT_FOOTNOTE = re.compile(r"\s*\[\d+\]\s*$")
+
+
+def _parse_about(soup) -> str | None:
+    """The company's own description of its business.
+
+    Costs nothing: this is on the page the scrape already downloads, so it is
+    the one piece of non-numeric context available without a second request.
+
+    Several selectors because screener has moved this block between layouts and
+    a company with no description must read as absent rather than as an empty
+    string -- the difference between "not scraped yet" and "says nothing".
+    """
+    for selector in (".company-profile .about", ".about p", "section#top .sub"):
+        node = soup.select_one(selector)
+        if node is None:
+            continue
+        text = " ".join(node.get_text(" ", strip=True).split())
+        text = _ABOUT_FOOTNOTE.sub("", text).strip()
+        if text:
+            return text
+    return None
 
 
 def _parse_company_id(soup) -> int | None:
