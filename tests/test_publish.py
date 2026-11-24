@@ -151,6 +151,50 @@ class FakeStore:
         return self.listed
 
 
+class TestSignalClimate:
+    """How each signal reads across the market, not for one company.
+
+    A chip saying "Price / book: SELL" cannot tell a reader whether that is
+    unusual. It is SELL for a third of the market, so the same chip means
+    something very different on a company where it is rare.
+    """
+
+    def test_it_counts_every_verdict_per_signal(self):
+        from mcfinex.publish import signal_climate
+
+        rows = [make_row(buys=7), make_row(buys=2)]
+        climate = {c["key"]: c for c in signal_climate(rows)}
+        assert climate, "every screened row carries signals"
+        for entry in climate.values():
+            total = entry["BUY"] + entry["HOLD"] + entry["SELL"] + entry["UNKNOWN"]
+            assert total == len(rows), f"{entry['key']} lost a company"
+
+    def test_unknown_is_kept_rather_than_dropped(self):
+        """A signal nobody can compute is itself the finding.
+
+        Inventory turnover is UNKNOWN for every services company. Dropping
+        those would make the signal look far more decisive than it is.
+        """
+        from mcfinex.publish import signal_climate
+
+        entries = signal_climate([make_row()])
+        assert all("UNKNOWN" in e for e in entries)
+
+    def test_it_carries_the_label_the_company_page_uses(self):
+        # So the market-wide view and the per-company table name the same
+        # signal the same way.
+        from mcfinex.publish import signal_climate
+
+        row = make_row()
+        labels = {s.label for s in row.screening.signals}
+        assert {e["label"] for e in signal_climate([row])} == labels
+
+    def test_an_empty_screen_produces_no_entries(self):
+        from mcfinex.publish import signal_climate
+
+        assert signal_climate([]) == []
+
+
 class TestWriteSite:
     def test_it_writes_a_file_for_every_screened_company(self, tmp_path):
         """Tiered or not. Reaching no shortlist is a verdict, not an absence.

@@ -12,7 +12,7 @@
  * new chart type silently renders nothing until somebody notices.
  */
 
-import { BarChart, ScatterChart, TreemapChart } from 'echarts/charts';
+import { BarChart, FunnelChart, ScatterChart, TreemapChart } from 'echarts/charts';
 import {
   DataZoomComponent,
   GridComponent,
@@ -29,7 +29,7 @@ import { CanvasRenderer } from 'echarts/renderers';
 import ReactEChartsCore from 'echarts-for-react/lib/core';
 
 echarts.use([
-  ScatterChart, TreemapChart, BarChart,
+  ScatterChart, TreemapChart, BarChart, FunnelChart,
   GridComponent, TooltipComponent, LegendComponent,
   DataZoomComponent, VisualMapComponent, MarkLineComponent,
   CanvasRenderer,

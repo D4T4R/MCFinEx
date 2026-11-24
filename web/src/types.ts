@@ -115,8 +115,27 @@ export interface ScreenPayload {
   sectors: SectorHeat[];
   companies: Company[];
   listed: Listed[];
+  /**
+   * How each signal reads across the whole market. Aggregated by the publisher
+   * because the per-signal verdicts live only in the per-company detail files,
+   * so computing this in the browser would mean fetching all 2,722 of them.
+   *
+   * Optional: a site published before this field existed does not carry it, and
+   * the app has to keep working against that rather than blank the page.
+   */
+  signals?: SignalClimate[];
   disclaimer: string;
   disclaimer_full: string;
+}
+
+/** One signal's verdict counts across everything screened. */
+export interface SignalClimate {
+  key: string;
+  label: string;
+  BUY: number;
+  HOLD: number;
+  SELL: number;
+  UNKNOWN: number;
 }
 
 /** Upper case, as `screening.Verdict` serialises. */

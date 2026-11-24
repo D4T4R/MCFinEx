@@ -240,6 +240,38 @@ def screen_row(row) -> dict[str, Any]:
     }
 
 
+def signal_climate(rows: Sequence) -> list[dict[str, Any]]:
+    """How each signal is reading across the whole market, not one company.
+
+    A company page says "Price / book: SELL". It cannot say whether that is
+    unusual, and a reader has no way to tell a company-specific weakness from a
+    market-wide one -- price-to-book is SELL for most of the market most of the
+    time, so the same chip means very different things for those two cases.
+
+    Aggregated here rather than in the browser because the per-signal verdicts
+    live only in the per-company files: answering this client-side would mean
+    fetching 2,722 of them. Costs about a kilobyte in an artefact of eleven
+    megabytes.
+
+    UNKNOWN is counted and kept. A signal that cannot be computed for a third
+    of the market is itself worth seeing -- inventory turnover is UNKNOWN for
+    every services company, and dropping those would make the signal look far
+    more decisive than it is.
+    """
+    counts: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        for signal in row.screening.signals:
+            entry = counts.setdefault(
+                signal.key,
+                {"key": signal.key, "label": signal.label,
+                 "BUY": 0, "HOLD": 0, "SELL": 0, "UNKNOWN": 0},
+            )
+            entry[signal.verdict.value] += 1
+    # Signal order is the order the screen defines them in, which is the order
+    # the company page lists them -- so the two read the same way round.
+    return list(counts.values())
+
+
 def screen_payload(rows: Sequence, *, priced: str | None = None,
                    scraped: str | None = None,
                    generated: str | None = None,
@@ -270,6 +302,7 @@ def screen_payload(rows: Sequence, *, priced: str | None = None,
         # shown the same blank as a typo. The two are indistinguishable from a
         # search box and only one of them is the screen's doing.
         "listed": listed,
+        "signals": signal_climate(rows),
         "disclaimer": SHORT_DISCLAIMER,
         "disclaimer_full": FULL_DISCLAIMER,
     }

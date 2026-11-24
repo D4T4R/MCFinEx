@@ -153,6 +153,7 @@ export default function App() {
                 companies={visible}
                 watched={watchlist.ids}
                 onToggleWatch={watchlist.toggle}
+                signals={payload.signals}
               />
             </>
           }

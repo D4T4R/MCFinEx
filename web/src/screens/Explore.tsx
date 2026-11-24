@@ -30,6 +30,8 @@ import { useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { Chart } from '../components/Chart';
+import { Distribution } from '../components/Distribution';
+import { HoldingBands } from '../components/HoldingBands';
 import { crore, percent, plain } from '../lib/format';
 import { robustBounds } from '../lib/scale';
 import type { Company, Tier } from '../types';
@@ -312,6 +314,33 @@ export function Explore({ companies, x, y, onAxes }: Props) {
           },
         }}
       />
+
+      {/* The scatter says where a company sits; these say what it sits in.
+          The histogram follows the x-axis picker rather than adding a second
+          one, so the two charts can never be describing different metrics or
+          the same metric on different scales. */}
+      <div className="mt-4 grid gap-4 lg:grid-cols-2">
+        <div className="panel p-4">
+          <h2 className="text-sm font-medium text-ink-200">
+            Distribution of {ax.label}
+          </h2>
+          <p className="mb-2 text-xs text-ink-600">
+            Follows the horizontal axis above.
+          </p>
+          <Distribution
+            companies={companies} metric={x} label={ax.label} log={ax.scale === 'log'}
+          />
+        </div>
+        <div className="panel p-4">
+          <h2 className="text-sm font-medium text-ink-200">
+            Upside by promoter holding
+          </h2>
+          <p className="mb-2 text-xs text-ink-600">
+            Whether skin in the game shows up in the model's verdict.
+          </p>
+          <HoldingBands companies={companies} />
+        </div>
+      </div>
     </div>
   );
 }

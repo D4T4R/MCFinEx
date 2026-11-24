@@ -11,8 +11,10 @@ import { Link } from 'react-router-dom';
 import { useVirtualizer } from '@tanstack/react-virtual';
 
 import { BoardChip, SignalCount, TierChip } from '../components/Chips';
+import { ConvictionFunnel } from '../components/ConvictionFunnel';
+import { SignalClimate } from '../components/SignalClimate';
 import { count, crore, money, percent, plain } from '../lib/format';
-import type { Company } from '../types';
+import type { Company, SignalClimate as SignalClimateRow } from '../types';
 
 type SortKey =
   | 'ticker' | 'market_cap' | 'price' | 'upside_pct' | 'buy_signals'
@@ -133,11 +135,13 @@ function compare(a: Company, b: Company, key: SortKey, desc: boolean): number {
 }
 
 export function Screener({
-  companies, watched, onToggleWatch,
+  companies, watched, onToggleWatch, signals,
 }: {
   companies: Company[];
   watched: Set<string>;
   onToggleWatch: (id: string) => void;
+  /** Absent on a site published before the publisher aggregated them. */
+  signals?: SignalClimateRow[];
 }) {
   const [sortKey, setSortKey] = useState<SortKey>('buy_signals');
   const [desc, setDesc] = useState(true);
@@ -163,7 +167,37 @@ export function Screener({
     }
   };
 
+  // Counted from the rows actually in view rather than from the published
+  // totals. With a filter on, the funnel then describes the filtered set --
+  // which is the only honest reading for a chart sitting directly above a
+  // filtered table, and still the whole market when nothing is filtered.
+  const tiers = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const c of companies) counts[c.tier] = (counts[c.tier] ?? 0) + 1;
+    return counts;
+  }, [companies]);
+
   return (
+    <>
+    <div className="mb-4 grid gap-4 lg:grid-cols-2">
+      <div className="panel p-4">
+      <h2 className="text-sm font-medium text-ink-200">How the screen narrows</h2>
+      <p className="mb-2 text-xs text-ink-600">
+        Each band is a subset of the one above it, so the width is the claim.
+      </p>
+      <ConvictionFunnel tiers={tiers} universe={companies.length} height={320} />
+      </div>
+      {signals && signals.length > 0 && (
+        <div className="panel p-4">
+          <h2 className="text-sm font-medium text-ink-200">What each signal says</h2>
+          <p className="mb-2 text-xs text-ink-600">
+            Across everything screened — on a company page a strict signal and a
+            generous one both read as one BUY.
+          </p>
+          <SignalClimate signals={signals} height={320} />
+        </div>
+      )}
+    </div>
     <div className="panel overflow-hidden">
      <div className="overflow-x-auto">
       <div className="flex min-w-[1260px] items-center gap-2 border-b border-ink-800 px-3 py-2 text-[11px] font-medium uppercase tracking-wide text-ink-600">
@@ -233,5 +267,6 @@ export function Screener({
         {count(rows.length)} rows · click a header to sort · ★ to watch
       </div>
     </div>
+    </>
   );
 }
