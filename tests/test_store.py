@@ -188,6 +188,102 @@ class TestValuations:
         assert store.scraped_tickers() == ["DONE"]
 
 
+class TestRevision:
+    """The cache key every Streamlit page load computes before rendering.
+
+    It only has to do two things: change when the data changes, and be cheap.
+    It had no tests, and the expensive half -- a COUNT(*) over 92,000 valuation
+    rows, 958 ms against the hosted database -- was 99% of the page's latency
+    spent confirming a row count had not moved.
+    """
+
+    def test_it_is_stable_when_nothing_changes(self, store):
+        store.upsert_company("ACME", {"last_updated": "2026-01-01"})
+        assert store.revision() == store.revision()
+
+    def test_a_scrape_moves_it(self, store):
+        store.upsert_company("ACME", {"last_updated": "2026-01-01"})
+        before = store.revision()
+        store.upsert_company("ACME", {"last_updated": "2026-01-02"})
+        assert store.revision() != before
+
+    def test_a_price_refresh_moves_it(self, store):
+        store.upsert_company("ACME", {})
+        before = store.revision()
+        store.update_prices({"ACME": 10.0}, "2026-01-02")
+        assert store.revision() != before
+
+    def test_a_new_company_moves_it(self, store):
+        before = store.revision()
+        store.upsert_company("NEW", {"isin": "IN1"})
+        assert store.revision() != before
+
+    def test_a_same_day_revalue_moves_it(self, store):
+        """What replaced the row count, and why the stamp became a timestamp.
+
+        Rewriting a value in place changes no row count, so the old COUNT(*)
+        never saw it. MAX(computed_at) only sees it because the stamp carries
+        a time: at the day granularity it used to have, a second revalue on
+        one day was indistinguishable from the first -- so an enrich run at
+        noon could rewrite the universe and leave every reader on the cached
+        screen until midnight.
+        """
+        store.upsert_company("ACME", {})
+        store.replace_valuations("ACME", "ev_ebitda", {"target_price": 10.0})
+        before = store.revision()
+        store.replace_valuations("ACME", "ev_ebitda", {"target_price": 99.0})
+        assert store.revision() != before
+
+    def test_an_enrich_that_adds_a_field_moves_it(self, store):
+        # The case that proved dropping COUNT(*) was not free: enrichment adds
+        # current_assets to an existing model, same day, no company row touched.
+        store.upsert_company("ACME", {})
+        store.replace_valuations("ACME", "derived", {"ebit": 1.0})
+        before = store.revision()
+        store.replace_valuations("ACME", "derived", {"ebit": 1.0, "current_assets": 5.0})
+        assert store.revision() != before
+
+    def test_tagging_moves_it(self, store):
+        """Otherwise `mcfinex tags` writes chips nobody can see.
+
+        Tags are read by the cards but touch no date and no row count, so
+        without counting them the page would keep serving the cached screen
+        until something unrelated happened to change.
+        """
+        store.upsert_company("ACME", {"about": "makes valves"})
+        before = store.revision()
+        store.upsert_company("ACME", {"tags": '{"source_sha":"a","tags":["Valves"]}'})
+        assert store.revision() != before
+
+    def test_it_survives_a_database_without_the_newer_columns(self, tmp_path):
+        """The bug this caught, before it shipped.
+
+        `revision` runs in the Streamlit process, which never migrates. Naming
+        `tags` unconditionally took every page down with UndefinedColumn
+        against the hosted database -- which has no such column until a nightly
+        happens to run create_schema -- and would have kept it down from the
+        moment the code deployed.
+        """
+        path = tmp_path / "older.db"
+        with Store(path) as s:
+            s.create_schema()
+            s.conn.execute("ALTER TABLE companies DROP COLUMN tags")
+            s.conn.execute("ALTER TABLE companies DROP COLUMN about")
+            s.conn.commit()
+        with Store(path) as s:
+            s.upsert_company("ACME", {"last_updated": "2026-01-01"})
+            assert s.revision()            # does not raise
+            before = s.revision()
+            s.upsert_company("ACME", {"last_updated": "2026-01-02"})
+            assert s.revision() != before  # and still tracks what it can see
+
+    def test_a_description_arriving_moves_it(self, store):
+        store.upsert_company("ACME", {})
+        before = store.revision()
+        store.upsert_company("ACME", {"about": "makes valves"})
+        assert store.revision() != before
+
+
 class TestScreenSnapshot:
     """The record of who was shortlisted, which is what "what changed" needs."""
 

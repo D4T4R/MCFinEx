@@ -22,6 +22,28 @@ log = logging.getLogger(__name__)
 
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
+
+def _valued_at() -> str:
+    """When a valuation was computed, as a precise timestamp.
+
+    A date was enough while this only answered "how fresh is the figure". It
+    is not enough for `revision`, which uses MAX of it as a cache key: at day
+    granularity two revalues on one day are indistinguishable, so an enrich run
+    at noon could rewrite the whole universe and leave every reader on the
+    cached screen until midnight.
+
+    Microseconds, not seconds: a revalue of the whole universe takes minutes,
+    but two writes inside one second are not hypothetical -- a single enrich
+    of one company does several -- and at second granularity the later one
+    would be invisible to MAX.
+
+    The column stays TEXT and the only equality read-back compares against the
+    stamp it just wrote, so nothing needed migrating -- older rows carry a bare
+    date, which sorts before any timestamp of the same day and is therefore
+    still correct under MAX.
+    """
+    return in_ist(datetime.now(timezone.utc)).isoformat(timespec="microseconds")
+
 # Guarded so a typo in a caller cannot silently write to a column that does not
 # exist, and so scraped keys can never widen the statement.
 COMPANY_COLUMNS = (
@@ -364,7 +386,7 @@ class Store:
         that is 35,616 round-trips for the universe, and a blip halfway leaves
         the database part-revalued.
         """
-        stamp = date.today().isoformat()
+        stamp = _valued_at()
         payload = [(t, m, f, _scalar(v), stamp) for t, m, f, v in rows
                    if not isinstance(v, (list, tuple))]
         placeholders = ", ".join("?" for _ in models)
@@ -396,7 +418,7 @@ class Store:
 
     def replace_valuations(self, ticker: str, model: str, fields: Mapping[str, Any]) -> int:
         """Replace one valuation model's output for a company."""
-        stamp = date.today().isoformat()
+        stamp = _valued_at()
         payload = [
             (ticker, model, field, _scalar(value), stamp)
             for field, value in fields.items()
@@ -892,21 +914,65 @@ class Store:
         """A token that changes whenever the data does.
 
         A local file has a modification time; a hosted database has not, so the
-        cache needs something from the rows themselves. Cheap enough to run on
-        every page load, and it changes after a scrape, a price refresh or an
-        enrichment.
+        cache needs something from the rows themselves. This runs on every page
+        load, uncached, before anything is rendered -- so its cost is the floor
+        under every page view.
+
+        It used to count the valuations. Measured against the hosted database
+        that single `COUNT(*)` over 92,000 rows took 958 ms, against 13 ms for
+        everything else here: 99% of the page's latency spent establishing that
+        the row count had not changed. Postgres has no cheap row count -- it
+        scans -- and the docstring's old claim that this was "cheap enough to
+        run on every page load" was written against local SQLite and stopped
+        being true when the database moved.
+
+        `MAX(computed_at)` replaces it at 28 ms. That is only equivalent
+        because the stamp became a timestamp at the same time: at the day
+        granularity it used to have, a second revalue on one day was
+        indistinguishable from the first, and an enrich run at noon could
+        rewrite the universe while every reader stayed on the cached screen
+        until midnight. To the second, every valuation write moves it --
+        including one that rewrites values in place, which a row count never
+        saw. The one case left to the count below is a pure delete, and
+        `prune` removes the company rows too.
+
+        `tags` and `about` are counted where they exist, because the cards read
+        them -- without that, `mcfinex tags` would write chips nobody could see
+        until some unrelated change moved the token.
+
+        "Where they exist" is load-bearing, not defensive habit. This runs in
+        the Streamlit process, which never migrates: naming a column added
+        after the hosted database was built takes every page down with
+        `UndefinedColumn` the moment the code deploys, and keeps it down until
+        a nightly happens to run `create_schema`. Resolved once per connection
+        rather than per call, so a page load pays one catalogue lookup.
         """
+        counts = ["COUNT(*) AS companies"]
+        for column in self._optional_counts():
+            counts.append(f"COUNT({column}) AS n_{column}")
         row = self.conn.execute(
             "SELECT MAX(last_updated) AS scraped, MAX(price_date) AS priced, "
-            "COUNT(*) AS companies FROM companies"
+            + ", ".join(counts) + " FROM companies"
         ).fetchone()
         valued = self.conn.execute(
-            "SELECT MAX(computed_at) AS computed, COUNT(*) AS n FROM valuations"
+            "SELECT MAX(computed_at) AS computed FROM valuations"
         ).fetchone()
-        return "|".join(str(x) for x in (
-            row["scraped"], row["priced"], row["companies"],
-            valued["computed"], valued["n"],
-        ))
+        parts = [row["scraped"], row["priced"], row["companies"]]
+        parts += [row[f"n_{c}"] for c in self._optional_counts()]
+        parts.append(valued["computed"])
+        return "|".join(str(x) for x in parts)
+
+    #: Columns worth counting in the token that an older database may not have.
+    OPTIONAL_REVISION_COUNTS = ("tags", "about")
+
+    def _optional_counts(self) -> tuple[str, ...]:
+        """Which of :attr:`OPTIONAL_REVISION_COUNTS` this database actually has."""
+        cached = getattr(self, "_revision_counts", None)
+        if cached is None:
+            present = self._company_columns()
+            cached = tuple(c for c in self.OPTIONAL_REVISION_COUNTS if c in present)
+            self._revision_counts = cached
+        return cached
 
     def data_freshness(self) -> tuple[str | None, str | None]:
         """Newest price date and scrape date across the universe."""
